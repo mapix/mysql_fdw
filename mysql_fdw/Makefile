@@ -16,7 +16,7 @@ MODULE_big = mysql_fdw
 OBJS = connection.o option.o deparse.o mysql_query.o mysql_fdw.o
 
 EXTENSION = mysql_fdw
-DATA = mysql_fdw--1.0.sql
+DATA = mysql_fdw--1.0.sql mysql_fdw--1.1.sql mysql_fdw--1.0--1.1.sql
 
 REGRESS = mysql_fdw
 
@@ -48,8 +48,8 @@ include $(PGXS)
 ifndef MAJORVERSION
 MAJORVERSION := $(basename $(VERSION))
 endif
-ifeq (,$(findstring $(MAJORVERSION), 9.3 9.4 9.5 9.6 10beta))
-$(error PostgreSQL 9.3, 9.4, 9.5, 9.6 or 10beta is required to compile this extension)
+ifeq (,$(findstring $(MAJORVERSION), 9.3 9.4 9.5 9.6 10 11))
+$(error PostgreSQL 9.3, 9.4, 9.5, 9.6 10 or 11 is required to compile this extension)
 endif
 
 else

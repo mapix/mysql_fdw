@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * mysql_fdw--1.0.sql
+ * mysql_fdw--1.1.sql
  * 			Foreign-data wrapper for remote MySQL servers
  *
  * Portions Copyright (c) 2012-2014, PostgreSQL Global Development Group
@@ -8,7 +8,7 @@
  * Portions Copyright (c) 2004-2014, EnterpriseDB Corporation.
  *
  * IDENTIFICATION
- * 			mysql_fdw--1.0.sql
+ * 			mysql_fdw--1.1.sql
  *
  *-------------------------------------------------------------------------
  */
@@ -24,13 +24,17 @@ RETURNS void
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT;
 
+CREATE FOREIGN DATA WRAPPER mysql_fdw
+  HANDLER mysql_fdw_handler
+  VALIDATOR mysql_fdw_validator;
+
 CREATE FUNCTION MATCH_AGAINST(varidiadic text[]) RETURNS BOOLEAN AS $$
 BEGIN
   RAISE 'Cannot execute this function in PostgreSQL';
 END
 $$ LANGUAGE plpgsql IMMUTABLE;
 
-CREATE FOREIGN DATA WRAPPER mysql_fdw
-  HANDLER mysql_fdw_handler
-  VALIDATOR mysql_fdw_validator;
+CREATE OR REPLACE FUNCTION mysql_fdw_version()
+  RETURNS pg_catalog.int4 STRICT
+  AS 'MODULE_PATHNAME' LANGUAGE C;
 

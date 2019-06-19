@@ -298,7 +298,7 @@ mysql_deparse_target_list(StringInfo buf,
 	*retrieved_attrs = NIL;
 	for (i = 1; i <= tupdesc->natts; i++)
 	{
-		Form_pg_attribute attr = tupdesc->attrs[i - 1];
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
 
 		/* Ignore dropped attributes. */
 		if (attr->attisdropped)
@@ -415,7 +415,11 @@ mysql_deparse_column_ref(StringInfo buf, int varno, int varattno, PlannerInfo *r
 	 * option, use attribute name.
 	 */
 	if (colname == NULL)
+#if PG_VERSION_NUM >= 110000
+		colname = get_attname(rte->relid, varattno, false);
+#else
 		colname = get_relid_attribute_name(rte->relid, varattno);
+#endif
 
 	appendStringInfoString(buf, mysql_quote_identifier(colname, '`'));
 }
@@ -896,19 +900,76 @@ mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context)
 	/* Translate PostgreSQL function into mysql function */
 	proname = mysql_replace_function(NameStr(procform->proname));
 
-	/* Deparse the function name ... */
-	appendStringInfo(buf, "%s(", proname);
-	
-	/* ... and all the arguments */
-	first = true;
-	foreach(arg, node->args)
+	if(strcmp(proname,"match_against")==0)
 	{
-		if (!first)
-			appendStringInfoString(buf, ", ");
-		deparseExpr((Expr *) lfirst(arg), context);
-		first = false;
+		/* ... and all the arguments */
+		first = true;
+		foreach(arg, node->args)
+		{
+			Expr *node;
+			ListCell   *lc;
+		    ArrayExpr *anode;
+			bool swt_arg;
+			node = lfirst(arg);
+			Assert(nodeTag(node)==T_ArrayExpr);
+			anode = (ArrayExpr *)node;
+			appendStringInfoString(buf, "MATCH (");
+			swt_arg = true;
+			foreach(lc, anode->elements)
+			{
+				Expr *node;
+				node=lfirst(lc);
+				if(nodeTag(node)==T_Var){
+					if (!first)
+						appendStringInfoString(buf, ", ");
+					mysql_deparse_var((Var *)node,context);
+				}
+				else if(nodeTag(node)==T_Const){
+					Const *cnode = (Const *)node;
+					if(swt_arg == true){
+						appendStringInfoString(buf, ") AGAINST ( ");
+						swt_arg = false;
+						first = true;
+						mysql_deparse_const(cnode,context);
+						appendStringInfoString(buf, " ");
+					}
+					else{
+						Oid         typoutput;
+						const char *valptr;
+						char        *extval;
+						bool        typIsVarlena;
+						getTypeOutputInfo(cnode->consttype,
+										  &typoutput, &typIsVarlena);
+
+						extval = OidOutputFunctionCall(typoutput, cnode->constvalue);
+						for (valptr = extval; *valptr; valptr++)
+						{
+							char	ch = *valptr;
+							if (SQL_STR_DOUBLE(ch, true))
+								appendStringInfoChar(buf, ch);
+							appendStringInfoChar(buf, ch);
+						}
+					}
+				}
+				first = false;
+			}
+			appendStringInfoChar(buf, ')');
+		}
 	}
-	appendStringInfoChar(buf, ')');
+	else{
+		/* Deparse the function name ... */
+		appendStringInfo(buf, "%s(", proname);
+		/* ... and all the arguments */
+		first = true;
+		foreach(arg, node->args)
+		{
+			if (!first)
+				appendStringInfoString(buf, ", ");
+			deparseExpr((Expr *) lfirst(arg), context);
+			first = false;
+		}
+		appendStringInfoChar(buf, ')');
+	}
 	ReleaseSysCache(proctup);
 }
 
@@ -1276,6 +1337,7 @@ foreign_expr_walker(Node *node,
 	foreign_loc_cxt inner_cxt;
 	Oid			collation;
 	FDWCollateState state;
+	HeapTuple	tuple;
 
 	/* Need do nothing for empty subexpressions */
 	if (node == NULL)
@@ -1391,13 +1453,23 @@ foreign_expr_walker(Node *node,
 		case T_FuncExpr:
 			{
 				FuncExpr   *fe = (FuncExpr *) node;
-
+				char	   *opername = NULL;
+				
 				/*
 				 * If function used by the expression is not built-in, it
 				 * can't be sent to remote because it might have incompatible
 				 * semantics on remote side.
 				 */
-				if (!is_builtin(fe->funcid))
+				tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(fe->funcid));
+				if (!HeapTupleIsValid(tuple))
+				{
+					elog(ERROR, "cache lookup failed for function %u", fe->funcid);
+				}
+				opername = pstrdup(((Form_pg_proc) GETSTRUCT(tuple))->proname.data);
+				ReleaseSysCache(tuple);
+
+				/* pushed down to mysql */
+				if (!is_builtin(fe->funcid) && strcmp(opername, "match_against") != 0)
 					return false;
 
 				/*
