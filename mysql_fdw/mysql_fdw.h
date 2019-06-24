@@ -125,7 +125,7 @@ typedef struct MySQLColumn
 	int   atttype;         /* Attribute type */
 } MySQLColumn;
 
-extern bool is_foreign_expr(PlannerInfo *root,
+extern bool mysql_is_foreign_expr(PlannerInfo *root,
                                 RelOptInfo *baserel,
                                 Expr *expr);
 
