@@ -26,7 +26,7 @@ LANGUAGE C STRICT;
 
 CREATE FUNCTION MATCH_AGAINST(varidiadic text[]) RETURNS BOOLEAN AS $$
 BEGIN
-  RAISE 'Cannot execute this function in PostgreSQL';
+  RETURN TRUE;
 END
 $$ LANGUAGE plpgsql IMMUTABLE;
 
