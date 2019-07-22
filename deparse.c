@@ -104,7 +104,7 @@ static void mysql_print_remote_placeholder(Oid paramtype, int32 paramtypmod,
 					deparse_expr_cxt *context);
 static void mysql_deparse_relation(StringInfo buf, Relation rel);
 static void mysql_deparse_target_list(StringInfo buf, PlannerInfo *root, Index rtindex, Relation rel,
-					Bitmapset *attrs_used, List **retrieved_attrs);
+					Bitmapset *attrs_used, List **retrieved_attrs, List *tlist, RelOptInfo *baserel);
 static void mysql_deparse_column_ref(StringInfo buf, int varno, int varattno, PlannerInfo *root);
 
 /*
@@ -186,7 +186,9 @@ mysql_deparse_select(StringInfo buf,
 				 PlannerInfo *root,
 				 RelOptInfo *baserel,
 				 Bitmapset *attrs_used,
-				 char *svr_table, List **retrieved_attrs)
+				 char *svr_table,
+				 List **retrieved_attrs,
+				 List *tlist)
 {
 	RangeTblEntry *rte = planner_rt_fetch(baserel->relid, root);
 	Relation	rel;
@@ -198,7 +200,8 @@ mysql_deparse_select(StringInfo buf,
 	rel = heap_open(rte->relid, NoLock);
 
 	appendStringInfoString(buf, "SELECT ");
-	mysql_deparse_target_list(buf, root, baserel->relid, rel, attrs_used, retrieved_attrs);
+	mysql_deparse_target_list(buf, root, baserel->relid, rel, attrs_used, 
+							  retrieved_attrs, tlist, baserel);
 
 	/*
 	 * Construct FROM clause
@@ -282,41 +285,66 @@ mysql_deparse_target_list(StringInfo buf,
 				  Index rtindex,
 				  Relation rel,
 				  Bitmapset *attrs_used,
-				  List **retrieved_attrs)
+				  List **retrieved_attrs,
+				  List *tlist,
+				  RelOptInfo *baserel)
 {
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	bool		have_wholerow;
 	bool		first;
 	int			i;
-
+	ListCell *cell;
 	/* If there's a whole-row reference, we'll need all the columns. */
 	have_wholerow = bms_is_member(0 - FirstLowInvalidHeapAttributeNumber,
 								  attrs_used);
-
 	first = true;
-	
-	*retrieved_attrs = NIL;
-	for (i = 1; i <= tupdesc->natts; i++)
+
+	if (retrieved_attrs)
 	{
-		Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
-
-		/* Ignore dropped attributes. */
-		if (attr->attisdropped)
-			continue;
-
-		if (have_wholerow ||
-			bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
-						  attrs_used))
+		/* Not pushdown target list */
+		*retrieved_attrs = NIL;
+		for (i = 1; i <= tupdesc->natts; i++)
 		{
+			Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
+
+			/* Ignore dropped attributes. */
+			if (attr->attisdropped)
+				continue;
+
+			if (have_wholerow ||
+				bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
+							  attrs_used))
+			{
+				if (!first)
+					appendStringInfoString(buf, ", ");
+				first = false;
+
+				mysql_deparse_column_ref(buf, rtindex, i, root);
+				*retrieved_attrs = lappend_int(*retrieved_attrs, i);
+			}
+		}
+	}
+	else
+	{
+		/* Pushdown target list */
+
+		/* Set up context struct for recursion */
+		deparse_expr_cxt context;
+		context.root = root;
+		context.foreignrel = baserel;
+		context.buf = buf;
+		context.params_list = NULL;
+		foreach (cell, tlist)
+		{
+			Expr *expr = ((TargetEntry *)lfirst(cell))->expr;
 			if (!first)
 				appendStringInfoString(buf, ", ");
 			first = false;
 
-			mysql_deparse_column_ref(buf, rtindex, i, root);
-			*retrieved_attrs = lappend_int(*retrieved_attrs, i);
+			/* Deparse target list for push down */
+			deparseExpr(expr, &context);
 		}
 	}
-
 	/* Don't generate bad syntax if no undropped columns */
 	if (first)
 		appendStringInfoString(buf, "NULL");
