@@ -389,7 +389,7 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 	ForeignTable      *table;
 	char              timeout[255];
 	int               numParams;
-
+	List *tlist;
 	/*
 	 * We'll save private state in node->fdw_state.
 	 */
@@ -421,6 +421,7 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 	/* Stash away the state info we have already */
 	festate->query = strVal(list_nth(fsplan->fdw_private, 0));
 	festate->retrieved_attrs = list_nth(fsplan->fdw_private, 1);
+	festate->is_tlist_pushdown = intVal(list_nth(fsplan->fdw_private, 2));
 	festate->conn = conn;
 	festate->cursor_exists = false;
 
@@ -535,19 +536,30 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 
     festate->table->_mysql_fields = _mysql_fetch_fields(festate->table->_mysql_res);
 
-	foreach(lc, festate->retrieved_attrs)
+	if (festate->is_tlist_pushdown)
+		tlist = node->ss.ps.plan->targetlist;
+	else
+		tlist = festate->retrieved_attrs;
+	
+	atindex = 0;
+	foreach (lc, tlist)
 	{
-		int attnum = lfirst_int(lc) - 1;
-		Oid pgtype = TupleDescAttr(tupleDescriptor, attnum)->atttypid;
-		int32 pgtypmod = TupleDescAttr(tupleDescriptor, attnum)->atttypmod;
-
+		Oid pgtype;
+		int32 pgtypmod;
+		int attnum;
+		if (festate->is_tlist_pushdown)
+			attnum = atindex;
+		else
+			attnum = lfirst_int(lc) - 1;
+		pgtype = TupleDescAttr(tupleDescriptor, attnum)->atttypid;
+		pgtypmod = TupleDescAttr(tupleDescriptor, attnum)->atttypmod;
 		if (TupleDescAttr(tupleDescriptor, attnum)->attisdropped)
 			continue;
 
 		festate->table->column[atindex]._mysql_bind = &festate->table->_mysql_bind[atindex];
 
 		mysql_bind_result(pgtype, pgtypmod, &festate->table->_mysql_fields[atindex],
-							&festate->table->column[atindex]);
+						  &festate->table->column[atindex]);
 		atindex++;
 	}
 
@@ -629,6 +641,7 @@ mysqlIterateForeignScan(ForeignScanState *node)
 	TupleTableSlot      *tupleSlot = node->ss.ss_ScanTupleSlot;
 	TupleDesc           tupleDescriptor = tupleSlot->tts_tupleDescriptor;
 	int                 attid = 0;
+
 	ListCell            *lc = NULL;
 	int                 rc = 0;
 
@@ -641,18 +654,30 @@ mysqlIterateForeignScan(ForeignScanState *node)
 	rc = _mysql_stmt_fetch(festate->stmt);
 	if (0 == rc)
 	{
-		foreach(lc, festate->retrieved_attrs)
+		List *tlist;
+		if (festate->is_tlist_pushdown)
+			tlist = node->ss.ps.plan->targetlist;
+		else
+			tlist = festate->retrieved_attrs;
+
+		foreach(lc, tlist)
 		{
-			int attnum = lfirst_int(lc) - 1;
-			Oid pgtype = TupleDescAttr(tupleDescriptor, attnum)->atttypid;
-			int32 pgtypmod = TupleDescAttr(tupleDescriptor, attnum)->atttypmod;
+			int attnum;
+			Oid pgtype;
+			int32 pgtypmod;
+			if (festate->is_tlist_pushdown)
+				attnum = attid;
+			else
+				attnum = lfirst_int(lc) - 1;
+			pgtype = TupleDescAttr(tupleDescriptor, attnum)->atttypid;
+			pgtypmod = TupleDescAttr(tupleDescriptor, attnum)->atttypmod;
 
 			tupleSlot->tts_isnull[attnum] = festate->table->column[attid].is_null;
 			if (!festate->table->column[attid].is_null)
 				tupleSlot->tts_values[attnum] = mysql_convert_to_pg(pgtype, pgtypmod,
                                                                     &festate->table->column[attid]);
-
 			attid++;
+
 		}
 		ExecStoreVirtualTuple(tupleSlot);
 	}
@@ -855,8 +880,8 @@ mysqlGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntablei
 		initStringInfo(&sql);
 		appendStringInfo(&sql, "EXPLAIN ");
 
-		mysql_deparse_select(&sql, root, baserel, fpinfo->attrs_used, options->svr_table, &retrieved_attrs);
-
+		mysql_deparse_select(&sql, root, baserel, fpinfo->attrs_used, options->svr_table, 
+							 &retrieved_attrs, NULL);
 		if (fpinfo->remote_conds)
 			mysql_append_where_clause(&sql, root, baserel, fpinfo->remote_conds,
 						  true, &params_list);
@@ -1083,7 +1108,7 @@ mysqlGetForeignPlan(
 
 	StringInfoData sql;
 	mysql_opt      *options;
-	List           *retrieved_attrs;
+	List           *retrieved_attrs = NIL;
 	ListCell       *lc;
 
 	/* Fetch options */
@@ -1142,7 +1167,11 @@ mysqlGetForeignPlan(
 			local_exprs = lappend(local_exprs, rinfo->clause);
 	}
 
-	mysql_deparse_select(&sql, root, baserel, fpinfo->attrs_used, options->svr_table, &retrieved_attrs);
+	/* Cannot compile this code for plain PostgreSQL, which doesn't have is_tlist_pushdown member */
+	if (baserel->is_tlist_pushdown)
+		mysql_deparse_select(&sql, root, baserel, fpinfo->attrs_used, options->svr_table, NULL, tlist);
+	else
+		mysql_deparse_select(&sql, root, baserel, fpinfo->attrs_used, options->svr_table, &retrieved_attrs, NULL);
 
 	if (remote_conds)
 		mysql_append_where_clause(&sql, root, baserel, remote_conds,
@@ -1161,7 +1190,7 @@ mysqlGetForeignPlan(
 	 * Items in the list must match enum FdwScanPrivateIndex, above.
 	 */
 
-	fdw_private = list_make2(makeString(sql.data), retrieved_attrs);
+	fdw_private = list_make3(makeString(sql.data), retrieved_attrs, makeInteger(baserel->is_tlist_pushdown));
 	/*
 	 * Create the ForeignScan node from target list, local filtering
 	 * expressions, remote parameter expressions, and FDW private information.
@@ -1176,7 +1205,7 @@ mysqlGetForeignPlan(
 	                       ,params_list
 	                       ,fdw_private
 #if PG_VERSION_NUM >= 90500
-	                       ,NIL
+	                       ,baserel->is_tlist_pushdown ? tlist : NIL
 	                       ,NIL
 	                       ,outer_plan
 #endif
