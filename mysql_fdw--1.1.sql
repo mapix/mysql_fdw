@@ -28,9 +28,9 @@ CREATE FOREIGN DATA WRAPPER mysql_fdw
   HANDLER mysql_fdw_handler
   VALIDATOR mysql_fdw_validator;
 
-CREATE FUNCTION MATCH_AGAINST(varidiadic text[]) RETURNS BOOLEAN AS $$
+CREATE FUNCTION MATCH_AGAINST(varidiadic text[]) RETURNS INT AS $$
 BEGIN
-  RETURN TRUE;
+  RETURN 1;
 END
 $$ LANGUAGE plpgsql IMMUTABLE;
 
