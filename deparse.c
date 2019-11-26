@@ -97,7 +97,7 @@ static void mysql_deparse_param(Param *node, deparse_expr_cxt *context);
 #if PG_VERSION_NUM < 120000
 	static void mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context);
 #else
-	static void mysql_deparse_array_ref(SubcriptingRef *node, deparse_expr_cxt *context);
+	static void mysql_deparse_array_ref(SubscriptingRef *node, deparse_expr_cxt *context);
 #endif
 static void mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context);
 static void mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context);

@@ -67,7 +67,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
-#if PG_VERISON_NUM < 120000
+#if PG_VERSION_NUM < 120000
 	#include "optimizer/var.h"
 #endif
 #include "parser/parsetree.h"
