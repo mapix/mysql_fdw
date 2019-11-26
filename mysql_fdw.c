@@ -25,6 +25,9 @@
 #include <errmsg.h>
 
 #include "access/reloptions.h"
+#if PG_VERSION_NUM >= 120000
+	#include "access/table.h"
+#endif
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_user_mapping.h"
@@ -60,13 +63,20 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#if PG_VERSION_NUM >= 120000
+	#include "nodes/primnodes.h"
+#endif
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
-#include "optimizer/var.h"
+#if PG_VERSION_NUM >= 120000
+	#include "optimizer/optimizer.h"
+#else
+	#include "optimizer/var.h"
+#endif
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"

@@ -28,7 +28,11 @@
 #include "access/tupdesc.h"
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
-#include "nodes/relation.h"
+#if PG_VERSION_NUM >= 120000
+	#include "nodes/pathnodes.h"
+#else
+	#include "nodes/relation.h"
+#endif
 #include "utils/rel.h"
 
 #define MYSQL_PREFETCH_ROWS	100
