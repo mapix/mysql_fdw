@@ -28,11 +28,12 @@
 #include "access/tupdesc.h"
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
-#if PG_VERSION_NUM >= 120000
-	#include "nodes/pathnodes.h"
-#else
+#if PG_VERSION_NUM < 120000
 	#include "nodes/relation.h"
+#else
+	#include "nodes/pathnodes.h"
 #endif
+
 #include "utils/rel.h"
 
 #define MYSQL_PREFETCH_ROWS	100
@@ -129,7 +130,7 @@ typedef struct MySQLColumn
 	int   atttype;         /* Attribute type */
 } MySQLColumn;
 
-extern bool mysql_is_foreign_expr(PlannerInfo *root,
+extern bool is_foreign_expr(PlannerInfo *root,
                                 RelOptInfo *baserel,
                                 Expr *expr);
 

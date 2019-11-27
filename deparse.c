@@ -31,14 +31,11 @@
 #include "commands/defrem.h"
 #include "datatype/timestamp.h"
 #include "nodes/nodeFuncs.h"
-#if PG_VERSION_NUM >= 120000
-	#include "nodes/primnodes.h"
-#endif
 #include "optimizer/clauses.h"
-#if PG_VERSION_NUM >= 120000
-	#include "optimizer/optimizer.h"
-#else
+#if PG_VERSION_NUM < 120000
 	#include "optimizer/var.h"
+#else
+	#include "optimizer/optimizer.h"
 #endif
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
@@ -95,9 +92,9 @@ static void mysql_deparse_var(Var *node, deparse_expr_cxt *context);
 static void mysql_deparse_const(Const *node, deparse_expr_cxt *context);
 static void mysql_deparse_param(Param *node, deparse_expr_cxt *context);
 #if PG_VERSION_NUM < 120000
-	static void mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context);
+static void mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context);
 #else
-	static void mysql_deparse_array_ref(SubscriptingRef *node, deparse_expr_cxt *context);
+static void mysql_deparse_array_ref(SubscriptingRef *node, deparse_expr_cxt *context);
 #endif
 static void mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context);
 static void mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context);
@@ -309,31 +306,31 @@ mysql_deparse_target_list(StringInfo buf,
 	have_wholerow = bms_is_member(0 - FirstLowInvalidHeapAttributeNumber,
 								  attrs_used);
 	first = true;
-
+	
 	if (retrieved_attrs)
 	{
 		/* Not pushdown target list */
-		*retrieved_attrs = NIL;
-		for (i = 1; i <= tupdesc->natts; i++)
+	*retrieved_attrs = NIL;
+	for (i = 1; i <= tupdesc->natts; i++)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
+
+		/* Ignore dropped attributes. */
+		if (attr->attisdropped)
+			continue;
+
+		if (have_wholerow ||
+			bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
+						  attrs_used))
 		{
-			Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
+			if (!first)
+				appendStringInfoString(buf, ", ");
+			first = false;
 
-			/* Ignore dropped attributes. */
-			if (attr->attisdropped)
-				continue;
-
-			if (have_wholerow ||
-				bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
-							  attrs_used))
-			{
-				if (!first)
-					appendStringInfoString(buf, ", ");
-				first = false;
-
-				mysql_deparse_column_ref(buf, rtindex, i, root);
-				*retrieved_attrs = lappend_int(*retrieved_attrs, i);
-			}
+			mysql_deparse_column_ref(buf, rtindex, i, root);
+			*retrieved_attrs = lappend_int(*retrieved_attrs, i);
 		}
+	}
 	}
 	else
 	{
@@ -866,9 +863,9 @@ mysql_deparse_param(Param *node, deparse_expr_cxt *context)
  */
 static void
 #if PG_VERSION_NUM < 120000
-	mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context)
+mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context)
 #else
-	mysql_deparse_array_ref(SubscriptingRef *node, deparse_expr_cxt *context)
+mysql_deparse_array_ref(SubscriptingRef *node, deparse_expr_cxt *context)
 #endif
 {
 	StringInfo	buf = context->buf;
@@ -1005,18 +1002,18 @@ mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context)
 		}
 	}
 	else{
-		/* Deparse the function name ... */
-		appendStringInfo(buf, "%s(", proname);
-		/* ... and all the arguments */
-		first = true;
-		foreach(arg, node->args)
-		{
-			if (!first)
-				appendStringInfoString(buf, ", ");
-			deparseExpr((Expr *) lfirst(arg), context);
-			first = false;
-		}
-		appendStringInfoChar(buf, ')');
+	/* Deparse the function name ... */
+	appendStringInfo(buf, "%s(", proname);
+	/* ... and all the arguments */
+	first = true;
+	foreach(arg, node->args)
+	{
+		if (!first)
+			appendStringInfoString(buf, ", ");
+		deparseExpr((Expr *) lfirst(arg), context);
+		first = false;
+	}
+	appendStringInfoChar(buf, ')');
 	}
 	ReleaseSysCache(proctup);
 }
@@ -1469,8 +1466,8 @@ foreign_expr_walker(Node *node,
 		case T_SubscriptingRef:
 			{
 				SubscriptingRef   *ar = (SubscriptingRef *) node;
-
 #endif
+
 				/* Assignment should not be in restrictions. */
 				if (ar->refassgnexpr != NULL)
 					return false;
@@ -1508,7 +1505,7 @@ foreign_expr_walker(Node *node,
 			{
 				FuncExpr   *fe = (FuncExpr *) node;
 				char	   *opername = NULL;
-				
+
 				/*
 				 * If function used by the expression is not built-in, it
 				 * can't be sent to remote because it might have incompatible
@@ -1809,7 +1806,7 @@ foreign_expr_walker(Node *node,
  * Returns true if given expr is safe to evaluate on the foreign server.
  */
 bool
-mysql_is_foreign_expr(PlannerInfo *root,
+is_foreign_expr(PlannerInfo *root,
                                 RelOptInfo *baserel,
                                 Expr *expr)
 {

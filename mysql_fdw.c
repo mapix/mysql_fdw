@@ -63,19 +63,16 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
-#if PG_VERSION_NUM >= 120000
-	#include "nodes/primnodes.h"
-#endif
 #include "optimizer/cost.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
-#if PG_VERSION_NUM >= 120000
-	#include "optimizer/optimizer.h"
-#else
+#if PG_VERSION_NUM < 120000
 	#include "optimizer/var.h"
+#else
+	#include "optimizer/optimizer.h"
 #endif
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
@@ -92,9 +89,9 @@
 
 /*
  * In PG 9.5.1 the number will be 90501,
- * our version is 2.5.1 so number will be 20501
+ * our version is 2.5.3 so number will be 20503
  */
-#define CODE_VERSION   20501
+#define CODE_VERSION   20503
 
 PG_MODULE_MAGIC;
 
@@ -550,7 +547,7 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 		tlist = node->ss.ps.plan->targetlist;
 	else
 		tlist = festate->retrieved_attrs;
-	
+
 	atindex = 0;
 	foreach (lc, tlist)
 	{
@@ -569,7 +566,7 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 		festate->table->column[atindex]._mysql_bind = &festate->table->_mysql_bind[atindex];
 
 		mysql_bind_result(pgtype, pgtypmod, &festate->table->_mysql_fields[atindex],
-						  &festate->table->column[atindex]);
+							&festate->table->column[atindex]);
 		atindex++;
 	}
 
@@ -868,7 +865,7 @@ mysqlGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel, Oid foreigntablei
 	{
 		RestrictInfo *ri = (RestrictInfo *) lfirst(lc);
 
-		if (mysql_is_foreign_expr(root, baserel, ri->clause))
+		if (is_foreign_expr(root, baserel, ri->clause))
 			fpinfo->remote_conds = lappend(fpinfo->remote_conds, ri);
 		else
 			fpinfo->local_conds = lappend(fpinfo->local_conds, ri);
@@ -1168,7 +1165,7 @@ mysqlGetForeignPlan(
 		}
 		else if (list_member_ptr(fpinfo->local_conds, rinfo))
 			local_exprs = lappend(local_exprs, rinfo->clause);
-		else if (mysql_is_foreign_expr(root, baserel, rinfo->clause))
+		else if (is_foreign_expr(root, baserel, rinfo->clause))
 		{
 			remote_conds = lappend(remote_conds, rinfo);
 			remote_exprs = lappend(remote_exprs, rinfo->clause);
@@ -1321,7 +1318,11 @@ mysqlPlanForeignModify(PlannerInfo *root,
 	 * Core code already has some lock on each rel being planned, so we can
 	 * use NoLock here.
 	 */
+#if PG_VERSION_NUM < 120000
 	rel = heap_open(rte->relid, NoLock);
+#else
+	rel = table_open(rte->relid, NoLock);
+#endif
 
 	foreignTableId = RelationGetRelid(rel);
 
@@ -1399,7 +1400,11 @@ mysqlPlanForeignModify(PlannerInfo *root,
 	if (plan->returningLists)
 		elog(ERROR, "RETURNING is not supported by this FDW");
 
+#if PG_VERSION_NUM < 120000
 	heap_close(rel, NoLock);
+#else
+	table_close(rel, NoLock);
+#endif
 	return list_make2(makeString(sql.data), targetAttrs);
 }
 
