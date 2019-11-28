@@ -310,27 +310,27 @@ mysql_deparse_target_list(StringInfo buf,
 	if (retrieved_attrs)
 	{
 		/* Not pushdown target list */
-	*retrieved_attrs = NIL;
-	for (i = 1; i <= tupdesc->natts; i++)
-	{
-		Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
-
-		/* Ignore dropped attributes. */
-		if (attr->attisdropped)
-			continue;
-
-		if (have_wholerow ||
-			bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
-						  attrs_used))
+		*retrieved_attrs = NIL;
+		for (i = 1; i <= tupdesc->natts; i++)
 		{
-			if (!first)
-				appendStringInfoString(buf, ", ");
-			first = false;
+			Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
 
-			mysql_deparse_column_ref(buf, rtindex, i, root);
-			*retrieved_attrs = lappend_int(*retrieved_attrs, i);
+			/* Ignore dropped attributes. */
+			if (attr->attisdropped)
+				continue;
+
+			if (have_wholerow ||
+				bms_is_member(i - FirstLowInvalidHeapAttributeNumber,
+							  attrs_used))
+			{
+				if (!first)
+					appendStringInfoString(buf, ", ");
+				first = false;
+
+				mysql_deparse_column_ref(buf, rtindex, i, root);
+				*retrieved_attrs = lappend_int(*retrieved_attrs, i);
+			}
 		}
-	}
 	}
 	else
 	{
@@ -1001,19 +1001,20 @@ mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context)
 			appendStringInfoChar(buf, ')');
 		}
 	}
-	else{
-	/* Deparse the function name ... */
-	appendStringInfo(buf, "%s(", proname);
-	/* ... and all the arguments */
-	first = true;
-	foreach(arg, node->args)
+	else
 	{
-		if (!first)
-			appendStringInfoString(buf, ", ");
-		deparseExpr((Expr *) lfirst(arg), context);
-		first = false;
-	}
-	appendStringInfoChar(buf, ')');
+		/* Deparse the function name ... */
+		appendStringInfo(buf, "%s(", proname);
+		/* ... and all the arguments */
+		first = true;
+		foreach(arg, node->args)
+		{
+			if (!first)
+				appendStringInfoString(buf, ", ");
+			deparseExpr((Expr *) lfirst(arg), context);
+			first = false;
+		}
+		appendStringInfoChar(buf, ')');
 	}
 	ReleaseSysCache(proctup);
 }
@@ -1806,7 +1807,7 @@ foreign_expr_walker(Node *node,
  * Returns true if given expr is safe to evaluate on the foreign server.
  */
 bool
-is_foreign_expr(PlannerInfo *root,
+mysql_is_foreign_expr(PlannerInfo *root,
                                 RelOptInfo *baserel,
                                 Expr *expr)
 {
