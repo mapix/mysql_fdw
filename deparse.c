@@ -32,7 +32,11 @@
 #include "datatype/timestamp.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
-#include "optimizer/var.h"
+#if PG_VERSION_NUM < 120000
+	#include "optimizer/var.h"
+#else
+	#include "optimizer/optimizer.h"
+#endif
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
@@ -87,7 +91,11 @@ static void deparseExpr(Expr *expr, deparse_expr_cxt *context);
 static void mysql_deparse_var(Var *node, deparse_expr_cxt *context);
 static void mysql_deparse_const(Const *node, deparse_expr_cxt *context);
 static void mysql_deparse_param(Param *node, deparse_expr_cxt *context);
+#if PG_VERSION_NUM < 120000
 static void mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context);
+#else
+static void mysql_deparse_array_ref(SubscriptingRef *node, deparse_expr_cxt *context);
+#endif
 static void mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context);
 static void mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context);
 static void mysql_deparse_operator_name(StringInfo buf, Form_pg_operator opform);
@@ -298,7 +306,7 @@ mysql_deparse_target_list(StringInfo buf,
 	have_wholerow = bms_is_member(0 - FirstLowInvalidHeapAttributeNumber,
 								  attrs_used);
 	first = true;
-
+	
 	if (retrieved_attrs)
 	{
 		/* Not pushdown target list */
@@ -532,8 +540,13 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 		case T_Param:
 			mysql_deparse_param((Param *) node, context);
 			break;
+#if PG_VERSION_NUM < 120000
 		case T_ArrayRef:
 			mysql_deparse_array_ref((ArrayRef *) node, context);
+#else
+		case T_SubscriptingRef:
+			mysql_deparse_array_ref((SubscriptingRef *) node, context);
+#endif
 			break;
 		case T_FuncExpr:
 			mysql_deparse_func_expr((FuncExpr *) node, context);
@@ -849,7 +862,11 @@ mysql_deparse_param(Param *node, deparse_expr_cxt *context)
  * Deparse an array subscript expression.
  */
 static void
+#if PG_VERSION_NUM < 120000
 mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context)
+#else
+mysql_deparse_array_ref(SubscriptingRef *node, deparse_expr_cxt *context)
+#endif
 {
 	StringInfo	buf = context->buf;
 	ListCell   *lowlist_item;
@@ -984,7 +1001,8 @@ mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context)
 			appendStringInfoChar(buf, ')');
 		}
 	}
-	else{
+	else
+	{
 		/* Deparse the function name ... */
 		appendStringInfo(buf, "%s(", proname);
 		/* ... and all the arguments */
@@ -1441,9 +1459,15 @@ foreign_expr_walker(Node *node,
 					state = FDW_COLLATE_UNSAFE;
 			}
 			break;
+#if PG_VERSION_NUM < 120000
 		case T_ArrayRef:
 			{
-				ArrayRef   *ar = (ArrayRef *) node;;
+				ArrayRef   *ar = (ArrayRef *) node;
+#else
+		case T_SubscriptingRef:
+			{
+				SubscriptingRef   *ar = (SubscriptingRef *) node;
+#endif
 
 				/* Assignment should not be in restrictions. */
 				if (ar->refassgnexpr != NULL)
@@ -1482,7 +1506,7 @@ foreign_expr_walker(Node *node,
 			{
 				FuncExpr   *fe = (FuncExpr *) node;
 				char	   *opername = NULL;
-				
+
 				/*
 				 * If function used by the expression is not built-in, it
 				 * can't be sent to remote because it might have incompatible

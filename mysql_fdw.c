@@ -25,6 +25,9 @@
 #include <errmsg.h>
 
 #include "access/reloptions.h"
+#if PG_VERSION_NUM >= 120000
+	#include "access/table.h"
+#endif
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_user_mapping.h"
@@ -66,7 +69,11 @@
 #include "optimizer/planmain.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
-#include "optimizer/var.h"
+#if PG_VERSION_NUM < 120000
+	#include "optimizer/var.h"
+#else
+	#include "optimizer/optimizer.h"
+#endif
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -82,9 +89,9 @@
 
 /*
  * In PG 9.5.1 the number will be 90501,
- * our version is 2.5.1 so number will be 20501
+ * our version is 2.5.3 so number will be 20503
  */
-#define CODE_VERSION   20501
+#define CODE_VERSION   20503
 
 PG_MODULE_MAGIC;
 
@@ -540,7 +547,7 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 		tlist = node->ss.ps.plan->targetlist;
 	else
 		tlist = festate->retrieved_attrs;
-	
+
 	atindex = 0;
 	foreach (lc, tlist)
 	{
@@ -559,7 +566,7 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 		festate->table->column[atindex]._mysql_bind = &festate->table->_mysql_bind[atindex];
 
 		mysql_bind_result(pgtype, pgtypmod, &festate->table->_mysql_fields[atindex],
-						  &festate->table->column[atindex]);
+							&festate->table->column[atindex]);
 		atindex++;
 	}
 
@@ -1311,7 +1318,11 @@ mysqlPlanForeignModify(PlannerInfo *root,
 	 * Core code already has some lock on each rel being planned, so we can
 	 * use NoLock here.
 	 */
+#if PG_VERSION_NUM < 120000
 	rel = heap_open(rte->relid, NoLock);
+#else
+	rel = table_open(rte->relid, NoLock);
+#endif
 
 	foreignTableId = RelationGetRelid(rel);
 
@@ -1389,7 +1400,11 @@ mysqlPlanForeignModify(PlannerInfo *root,
 	if (plan->returningLists)
 		elog(ERROR, "RETURNING is not supported by this FDW");
 
+#if PG_VERSION_NUM < 120000
 	heap_close(rel, NoLock);
+#else
+	table_close(rel, NoLock);
+#endif
 	return list_make2(makeString(sql.data), targetAttrs);
 }
 
