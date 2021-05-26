@@ -49,23 +49,22 @@ x->second = y.tm_sec; \
 } while(0);
 
 static int32 mysql_from_pgtyp(Oid type);
-static int dec_bin(int number);
+static char *dec_bin (unsigned long number, int sz);
 static int bin_dec(int binarynumber);
-
 
 /*
  * convert_mysql_to_pg:
  * 		Convert MySQL data into PostgreSQL's compatible data types
  */
 Datum
-mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column *column)
+mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column *column, MYSQL_FIELD field)
 {
 	Datum		value_datum;
 	Datum		valueDatum;
 	regproc		typeinput;
 	HeapTuple	tuple;
 	int			typemod;
-	char		str[MAXDATELEN];
+	char	   *str = palloc0(MAXDATELEN);
 
 	/* get the type's output function */
 	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(pgtyp));
@@ -103,9 +102,39 @@ mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column *column)
 			return PointerGetDatum(column->value);
 
 		case BITOID:
-			sprintf(str, "%d", dec_bin(*((int *) column->value)));
+		{
+			/*
+			 * For bit type, need to convert each character to binary 8 bit.
+			 */
+			char   *outputString = (char *) column->value;
+			int		i;
+
+			if (field.type == MYSQL_TYPE_BIT)
+			{
+				for (i = 0; i < strlen(outputString); i++)
+				{
+					unsigned long v = (unsigned long) outputString[i];
+
+					sprintf(str, "%s%s", str, dec_bin(v, 8));
+				}
+			}
+			else
+			{
+				unsigned long value = atoll(outputString);
+
+				sprintf(str, "%s", dec_bin(value, 64));
+			}
+
+			/* Remove leading zero */
+			while(str[0] == '0')
+				str++;
+
+			if (strcmp(str, "") == 0)
+				str[0] = '0';
+
 			valueDatum = CStringGetDatum((char *) str);
 			break;
+		}
 		default:
 			valueDatum = CStringGetDatum((char *) column->value);
 	}
@@ -437,22 +466,17 @@ mysql_bind_result(Oid pgtyp, int pgtypmod, MYSQL_FIELD *field,
 	}
 }
 
-static int
-dec_bin(int number)
+static char *
+dec_bin (unsigned long number, int sz)
 {
-	int			rem;
-	int			i = 1;
-	int			bin = 0;
+	char  *str = palloc0(64 + 1);
+	char *p = str + 64;
+	int i;
 
-	while (number != 0)
-	{
-		rem = number % 2;
-		number /= 2;
-		bin += rem * i;
-		i *= 10;
-	}
+	for (i = 0; i < sz; i++)
+		*(--p) = (number>>i & 1) ? '1' : '0';
 
-	return bin;
+	return p;
 }
 
 static int

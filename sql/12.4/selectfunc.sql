@@ -17,6 +17,9 @@ CREATE USER MAPPING FOR CURRENT_USER SERVER server1
 --Testcase 4:
 CREATE FOREIGN TABLE s3(id int, tag1 text, value1 float, value2 int, value3 float, value4 int, str1 text, str2 text) SERVER server1 OPTIONS(dbname 'mysql_fdw_regress', table_name 's3');
 
+--Testcase 55:
+CREATE FOREIGN TABLE s4(id int, c1 time without time zone) SERVER server1 OPTIONS(dbname 'mysql_fdw_regress', table_name 's4');
+
 -- s3 (value1 as float8, value2 as bigint)
 --Testcase 5:
 \d s3;
@@ -150,6 +153,93 @@ SELECT sum(value3),abs(sum(value3)) FROM s3;
 --Testcase 30:
 SELECT sum(value3),abs(sum(value3)) FROM s3;
 
+-- test aggregation (sum, count, avg) with time interval
+--Testcase 56:
+SELECT * FROM s4;
+-- sum and time without casting to interval
+--Testcase 57:
+EXPLAIN VERBOSE
+SELECT sum(c1) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 58:
+SELECT sum(c1) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- sum and time with casting to interval
+--Testcase 59:
+EXPLAIN VERBOSE
+SELECT sum(c1::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 60:
+SELECT sum(c1::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- sum and time with interval const and without casting to interval
+--Testcase 61:
+EXPLAIN VERBOSE
+SELECT sum(c1 + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 62:
+SELECT sum(c1 + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- sum and time with interval const and with casting to interval
+--Testcase 63:
+EXPLAIN VERBOSE
+SELECT sum(c1::interval + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 64:
+SELECT sum(c1::interval + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- sum and time with milisecond
+--Testcase 66:
+EXPLAIN VERBOSE
+SELECT sum(c1::interval + '24:10:10.123456'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 67:
+SELECT sum(c1::interval + '24:10:10.123456'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- avg and time without casting to interval
+--Testcase 68:
+EXPLAIN VERBOSE
+SELECT avg(c1) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 69:
+SELECT avg(c1) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- avg and time with casting to interval
+--Testcase 70:
+EXPLAIN VERBOSE
+SELECT avg(c1::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 71:
+SELECT avg(c1::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- avg and time with interval const and without casting to interval
+--Testcase 72:
+EXPLAIN VERBOSE
+SELECT avg(c1 + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 74:
+SELECT avg(c1 + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- avg and time with interval const and with casting to interval
+--Testcase 75:
+EXPLAIN VERBOSE
+SELECT avg(c1::interval + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 76:
+SELECT avg(c1::interval + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- avg and time with milisecond
+--Testcase 77:
+EXPLAIN VERBOSE
+SELECT avg(c1::interval + '24:10:10.123456'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+--Testcase 78:
+SELECT avg(c1::interval + '24:10:10.123456'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+
+-- count with cast to interval
+--Testcase 79:
+EXPLAIN VERBOSE
+SELECT count(c1::interval) FROM s4 GROUP BY id;
+--Testcase 80:
+SELECT count(c1::interval) FROM s4 GROUP BY id;
+
+-- count without cast to interval
+--Testcase 81:
+EXPLAIN VERBOSE
+SELECT count(c1) FROM s4 GROUP BY id;
+--Testcase 82:
+SELECT count(c1) FROM s4 GROUP BY id;
+
 -- select abs as nest with log2 (pushdown, explain)
 -- EXPLAIN VERBOSE
 -- SELECT abs(log2(value1)),abs(log2(1/value1)) FROM s3;
@@ -257,7 +347,8 @@ SELECT abs(value1), sqrt(value2), chr(id+40) FROM s3;
 
 --Testcase 47:
 DROP FOREIGN TABLE s3;
-
+--Testcase 65:
+DROP FOREIGN TABLE s4;
 -- full text search table
 --Testcase 48:
 CREATE FOREIGN TABLE ftextsearch(id int, content text) SERVER server1 OPTIONS(dbname 'mysql_fdw_regress', table_name 'ftextsearch');
@@ -275,6 +366,24 @@ SELECT MATCH_AGAINST(ARRAY[content, 'success catches']) AS score, content FROM f
 
 --Testcase 51:
 DROP FOREIGN TABLE ftextsearch;
+
+--Testcase 83:
+CREATE FOREIGN TABLE s5(id int, b bit, b8 bit(8), b64 bit(64)) SERVER server1 OPTIONS(dbname 'mysql_fdw_regress', table_name 's5');
+
+--Testcase 84:
+SELECT * FROM s5;
+
+-- select bit_and, bit_or (pushdown, explain)
+--Testcase 85:
+EXPLAIN VERBOSE
+SELECT bit_and(b), bit_and(b8), bit_or(b), bit_or(b8), bit_and(b64), bit_or(b64) FROM s5;
+
+-- select bit_and, bit_or (pushdown, result)
+--Testcase 86:
+SELECT bit_and(b), bit_and(b8), bit_or(b), bit_or(b8), bit_and(b64), bit_or(b64) FROM s5;
+
+--Testcase 87:
+DROP FOREIGN TABLE s5;
 
 --Testcase 52:
 DROP USER MAPPING FOR CURRENT_USER SERVER server1;

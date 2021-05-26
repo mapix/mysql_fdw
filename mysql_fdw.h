@@ -23,16 +23,19 @@
 #undef list_delete
 #undef list_free
 
+#include "funcapi.h"
 #include "access/tupdesc.h"
 #include "fmgr.h"
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
+#include "optimizer/paths.h"
 #if PG_VERSION_NUM < 120000
 #include "nodes/relation.h"
 #else
 #include "nodes/pathnodes.h"
 #endif
 #include "utils/rel.h"
+#include "utils/float.h"
 
 #define MYSQL_PREFETCH_ROWS	100
 #define MYSQL_BLKSIZ		(1024 * 4)
@@ -75,6 +78,115 @@
 #define mysql_num_fields (*_mysql_num_fields)
 #define mysql_num_rows (*_mysql_num_rows)
 #define mysql_warning_count (*_mysql_warning_count)
+#define mysql_stmt_affected_rows (*_mysql_stmt_affected_rows)
+
+/*
+ * FDW-specific planner information kept in RelOptInfo.fdw_private for a
+ * mysql_fdw foreign table.  For a baserel, this struct is created by
+ * mysqlGetForeignRelSize, although some fields are not filled till later.
+ * mysqlGetForeignJoinPaths creates it for a joinrel, and
+ * mysqlGetForeignUpperPaths creates it for an upperrel.
+ */
+typedef struct MySQLFdwRelationInfo
+{
+	/*
+	 * True means that the relation can be pushed down. Always true for simple
+	 * foreign scan.
+	 */
+	bool		pushdown_safe;
+
+	/*
+	 * Restriction clauses, divided into safe and unsafe to pushdown subsets.
+	 * All entries in these lists should have RestrictInfo wrappers; that
+	 * improves efficiency of selectivity and cost estimation.
+	 */
+	List	   *remote_conds;
+	List	   *local_conds;
+
+	/* Actual remote restriction clauses for scan (sans RestrictInfos) */
+	List	   *final_remote_exprs;
+
+	/* Bitmap of attr numbers we need to fetch from the remote server. */
+	Bitmapset  *attrs_used;
+
+	/* True means that the query_pathkeys is safe to push down */
+	bool		qp_is_pushdown_safe;
+
+	/* Cost and selectivity of local_conds. */
+	QualCost	local_conds_cost;
+	Selectivity local_conds_sel;
+
+	/* Selectivity of join conditions */
+	Selectivity joinclause_sel;
+
+	/* Estimated size and cost for a scan, join, or grouping/aggregation. */
+	double		rows;
+	int			width;
+	Cost		startup_cost;
+	Cost		total_cost;
+
+	/*
+	 * Estimated number of rows fetched from the foreign server, and costs
+	 * excluding costs for transferring those rows from the foreign server.
+	 * These are only used by estimate_path_cost_size().
+	 */
+	double		retrieved_rows;
+	Cost		rel_startup_cost;
+	Cost		rel_total_cost;
+
+	/* Options extracted from catalogs. */
+	bool		use_remote_estimate;
+	Cost		fdw_startup_cost;
+	Cost		fdw_tuple_cost;
+	List	   *shippable_extensions;	/* OIDs of whitelisted extensions */
+
+	/* Cached catalog information. */
+	ForeignTable *table;
+	ForeignServer *server;
+	UserMapping *user;			/* only set in use_remote_estimate mode */
+
+	int			fetch_size;		/* fetch size for this remote table */
+
+	/*
+	 * Name of the relation, for use while EXPLAINing ForeignScan.  It is used
+	 * for join and upper relations but is set for all relations.  For a base
+	 * relation, this is really just the RT index as a string; we convert that
+	 * while producing EXPLAIN output.  For join and upper relations, the name
+	 * indicates which base foreign tables are included and the join type or
+	 * aggregation type used.
+	 */
+	char	   *relation_name;
+
+	/* Join information */
+	RelOptInfo *outerrel;
+	RelOptInfo *innerrel;
+	JoinType	jointype;
+	/* joinclauses contains only JOIN/ON conditions for an outer join */
+	List	   *joinclauses;	/* List of RestrictInfo */
+
+	/* Upper relation information */
+	UpperRelationKind stage;
+
+	/* Grouping information */
+	List	   *grouped_tlist;
+
+	/* Subquery information */
+	bool		make_outerrel_subquery; /* do we deparse outerrel as a
+										 * subquery? */
+	bool		make_innerrel_subquery; /* do we deparse innerrel as a
+										 * subquery? */
+	Relids		lower_subquery_rels;	/* all relids appearing in lower
+										 * subqueries */
+
+	/*
+	 * Index of the relation.  It is used to create an alias to a subquery
+	 * representing the relation.
+	 */
+	int			relation_index;
+
+	/* Function pushdown surppot in target list */
+	bool		is_tlist_func_pushdown;
+} MySQLFdwRelationInfo;
 
 /*
  * Options structure to store the MySQL
@@ -94,6 +206,8 @@ typedef struct mysql_opt
 	unsigned long max_blob_size;	/* Max blob size to read without
 									 * truncation */
 	bool		use_remote_estimate;	/* use remote estimate for rows */
+
+	char		*column_name;	/* use column name option */
 
 	/* SSL parameters; unused options may be given as NULL */
 	char	   *ssl_key;		/* MySQL SSL: path to the key file */
@@ -152,7 +266,41 @@ typedef struct MySQLFdwExecState
 	bool 	    is_tlist_pushdown;      /* pushdown target list or not */
 	/* working memory context */
 	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
+	MYSQL_RES 	*metadata;
 } MySQLFdwExecState;
+
+/*
+ * Execution state of a foreign scan that modifies a foreign table directly.
+ */
+typedef struct MySQLFdwDirectModifyState
+{
+	Relation	rel;			/* relcache entry for the foreign table */
+	AttInMetadata *attinmeta;	/* attribute datatype conversion metadata */
+
+	/* extracted fdw_private data */
+	char	   *query;			/* text of UPDATE/DELETE command */
+	bool		has_returning;	/* is there a RETURNING clause? */
+	List	   *retrieved_attrs;	/* attr numbers retrieved by RETURNING */
+	bool		set_processed;	/* do we set the command es_processed? */
+
+	/* for remote query execution */
+	MYSQL	   *conn;			/* MySQL connection handle */
+	MYSQL_STMT *stmt;			/* MySQL prepared stament handle */
+	int			numParams;		/* number of parameters passed to query */
+	FmgrInfo   *param_flinfo;	/* output conversion functions for them */
+	List	   *param_exprs;	/* executable expressions for param values */
+	const char **param_values;	/* textual values of query parameters */
+	Oid		   *param_types;	/* type of query parameters */
+
+	/* for storing result tuples */
+	mysql_table *table;			/* result for query */
+	int			num_tuples;		/* # of result tuples */
+	Relation	resultRel;		/* relcache entry for the target relation */
+
+	/* working memory context */
+	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
+}			MySQLFdwDirectModifyState;
+
 
 
 /* MySQL Column List */
@@ -211,6 +359,10 @@ extern unsigned int ((mysql_errno) (MYSQL *mysql));
 extern unsigned int ((mysql_num_fields) (MYSQL_RES *result));
 extern unsigned int ((mysql_num_rows) (MYSQL_RES *result));
 extern unsigned int ((mysql_warning_count)(MYSQL *mysql));
+extern uint64_t ((mysql_stmt_affected_rows)(MYSQL_STMT *stmt));
+
+void		mysql_reset_transmission_modes(int nestlevel);
+int			mysql_set_transmission_modes(void);
 
 /* option.c headers */
 extern bool mysql_is_valid_option(const char *option, Oid context);
@@ -226,15 +378,54 @@ extern void mysql_deparse_insert(StringInfo buf, PlannerInfo *root,
 extern void mysql_deparse_update(StringInfo buf, PlannerInfo *root,
 								 Index rtindex, Relation rel,
 								 List *targetAttrs, char *attname);
+extern void mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
+												Index rtindex, Relation rel,
+												RelOptInfo *foreignrel,
+												List *targetlist,
+												List *targetAttrs,
+												List *remote_conds,
+												List **params_list,
+												List **retrieved_attrs);
+
 extern void mysql_deparse_delete(StringInfo buf, PlannerInfo *root,
 								 Index rtindex, Relation rel, char *name);
+extern void mysql_deparse_direct_delete_sql(StringInfo buf, PlannerInfo *root,
+												Index rtindex, Relation rel,
+												RelOptInfo *foreignrel,
+												List *remote_conds,
+												List **params_list,
+												List **retrieved_attrs);								 
 extern void mysql_append_where_clause(StringInfo buf, PlannerInfo *root,
 									  RelOptInfo *baserel, List *exprs,
 									  bool is_first, List **params);
 extern void mysql_deparse_analyze(StringInfo buf, char *dbname, char *relname);
+extern void mysql_deparse_select_stmt_for_rel(StringInfo buf, PlannerInfo *root,
+											RelOptInfo *foreignrel, List *tlist,
+											List *remote_conds, List *pathkeys,
+											bool has_final_sort, bool has_limit,
+											bool is_subquery,
+											List **retrieved_attrs, List **params_list);
 extern bool mysql_is_foreign_expr(PlannerInfo *root, RelOptInfo *baserel,
 								  Expr *expr);
+extern bool mysql_is_foreign_param(PlannerInfo *root,
+							 RelOptInfo *baserel,
+							 Expr *expr);
+extern const char *mysql_get_jointype_name(JoinType jointype);
+extern void mysql_classify_conditions(PlannerInfo *root,
+							   RelOptInfo *baserel,
+							   List *input_conds,
+							   List **remote_conds,
+							   List **local_conds);
+extern Expr *mysql_find_em_expr_for_input_target(PlannerInfo *root,
+										   EquivalenceClass *ec,
+										   PathTarget *target);
+extern List *mysql_build_tlist_to_deparse(RelOptInfo *foreignrel);
 
+#if PG_VERSION_NUM < 130000
+extern Expr *mysql_find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel);
+#else
+#define mysql_find_em_expr_for_rel find_em_expr_for_rel
+#endif
 
 /* connection.c headers */
 MYSQL *mysql_get_connection(ForeignServer *server, UserMapping *user,
@@ -242,9 +433,15 @@ MYSQL *mysql_get_connection(ForeignServer *server, UserMapping *user,
 MYSQL *mysql_connect(mysql_opt *opt);
 void mysql_cleanup_connection(void);
 void mysql_release_connection(MYSQL *conn);
+extern char *mysql_quote_identifier(const char *str, char quotechar);
 
 #if PG_VERSION_NUM < 110000		/* TupleDescAttr is defined from PG version 11 */
 #define TupleDescAttr(tupdesc, i) ((tupdesc)->attrs[(i)])
+#endif
+
+#if (PG_VERSION_NUM < 120000)
+#define table_close(rel, lock)	heap_close(rel, lock)
+#define table_open(rel, lock)	heap_open(rel, lock)
 #endif
 
 #endif							/* MYSQL_FDW_H */

@@ -12,6 +12,8 @@ CREATE USER MAPPING FOR CURRENT_USER SERVER server1
 --IMPORT FOREIGN SCHEMA public FROM SERVER server1 INTO public OPTIONS(import_time_text 'false');
 --Testcase 4:
 CREATE FOREIGN TABLE s3(id int, tag1 text, value1 float, value2 int, value3 float, value4 int, str1 text, str2 text) SERVER server1 OPTIONS(dbname 'mysql_fdw_regress', table_name 's3');
+--Testcase 55:
+CREATE FOREIGN TABLE s4(id int, c1 time without time zone) SERVER server1 OPTIONS(dbname 'mysql_fdw_regress', table_name 's4');
 -- s3 (value1 as float8, value2 as bigint)
 --Testcase 5:
 \d s3;
@@ -47,7 +49,7 @@ EXPLAIN VERBOSE
 SELECT float8(value1), float8(value2), float8(value3), float8(value4) FROM s3;
                                          QUERY PLAN                                          
 ---------------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1015.00 rows=1000 width=32)
+ Foreign Scan on public.s3  (cost=100.00..169.71 rows=1706 width=32)
    Output: value1, float8(value2), value3, float8(value4)
    Local server startup cost: 10
    Remote query: SELECT `value1`, `value2`, `value3`, `value4` FROM `mysql_fdw_regress`.`s3`
@@ -72,7 +74,7 @@ EXPLAIN VERBOSE
 SELECT sqrt(value1), sqrt(value2) FROM s3;
                                QUERY PLAN                                
 -------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1017.50 rows=1000 width=16)
+ Foreign Scan on public.s3  (cost=100.00..195.31 rows=2275 width=16)
    Output: sqrt(value1), sqrt((value2)::double precision)
    Local server startup cost: 10
    Remote query: SELECT `value1`, `value2` FROM `mysql_fdw_regress`.`s3`
@@ -97,7 +99,7 @@ EXPLAIN VERBOSE
 SELECT sqrt(value1), sqrt(value2) FROM s3 WHERE to_hex(value2) != '64';
                                QUERY PLAN                                
 -------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1017.50 rows=1000 width=16)
+ Foreign Scan on public.s3  (cost=100.00..206.38 rows=2264 width=16)
    Output: sqrt(value1), sqrt((value2)::double precision)
    Filter: (to_hex(s3.value2) <> '64'::text)
    Local server startup cost: 10
@@ -120,7 +122,7 @@ EXPLAIN VERBOSE
 SELECT sqrt(value1), sqrt(value2) FROM s3 WHERE value2 != 200;
                                             QUERY PLAN                                             
 ---------------------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1017.50 rows=1000 width=16)
+ Foreign Scan on public.s3  (cost=100.00..200.70 rows=2264 width=16)
    Output: sqrt(value1), sqrt((value2)::double precision)
    Local server startup cost: 10
    Remote query: SELECT `value1`, `value2` FROM `mysql_fdw_regress`.`s3` WHERE ((`value2` <> 200))
@@ -142,7 +144,7 @@ EXPLAIN VERBOSE
 SELECT abs(value1), abs(value2), abs(value3), abs(value4) FROM s3;
                                          QUERY PLAN                                          
 ---------------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1020.00 rows=1000 width=24)
+ Foreign Scan on public.s3  (cost=100.00..178.24 rows=1706 width=24)
    Output: abs(value1), abs(value2), abs(value3), abs(value4)
    Local server startup cost: 10
    Remote query: SELECT `value1`, `value2`, `value3`, `value4` FROM `mysql_fdw_regress`.`s3`
@@ -168,7 +170,7 @@ EXPLAIN VERBOSE
 SELECT abs(value1), abs(value2), abs(value3), abs(value4) FROM s3 WHERE to_hex(value2) != '64';
                                          QUERY PLAN                                          
 ---------------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1020.00 rows=1000 width=24)
+ Foreign Scan on public.s3  (cost=100.00..186.50 rows=1697 width=24)
    Output: abs(value1), abs(value2), abs(value3), abs(value4)
    Filter: (to_hex(s3.value2) <> '64'::text)
    Local server startup cost: 10
@@ -191,7 +193,7 @@ EXPLAIN VERBOSE
 SELECT abs(value1), abs(value2), abs(value3), abs(value4) FROM s3 WHERE value2 != 200;
                                                       QUERY PLAN                                                       
 -----------------------------------------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1020.00 rows=1000 width=24)
+ Foreign Scan on public.s3  (cost=100.00..182.23 rows=1697 width=24)
    Output: abs(value1), abs(value2), abs(value3), abs(value4)
    Local server startup cost: 10
    Remote query: SELECT `value1`, `value2`, `value3`, `value4` FROM `mysql_fdw_regress`.`s3` WHERE ((`value2` <> 200))
@@ -214,7 +216,7 @@ EXPLAIN VERBOSE
 SELECT log(value1::numeric, value2::numeric) FROM s3 WHERE value1 != 1;
                                            QUERY PLAN                                            
 -------------------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1017.50 rows=1000 width=32)
+ Foreign Scan on public.s3  (cost=100.00..200.70 rows=2264 width=32)
    Output: log((value1)::numeric, (value2)::numeric)
    Local server startup cost: 10
    Remote query: SELECT `value1`, `value2` FROM `mysql_fdw_regress`.`s3` WHERE ((`value1` <> 1))
@@ -239,7 +241,7 @@ EXPLAIN VERBOSE
 SELECT log(value1, 0.1) FROM s3 WHERE value1 != 1;
                                       QUERY PLAN                                       
 ---------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1260.00 rows=1000 width=8)
+ Foreign Scan on public.s3  (cost=100.00..829.69 rows=2547 width=8)
    Output: log(value1, '0.1'::double precision)
    Local server startup cost: 10
    Remote query: SELECT `value1` FROM `mysql_fdw_regress`.`s3` WHERE ((`value1` <> 1))
@@ -256,7 +258,7 @@ EXPLAIN VERBOSE
 SELECT log(value2, 3) FROM s3 WHERE value1 != 1;
                                       QUERY PLAN                                       
 ---------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1262.50 rows=1000 width=8)
+ Foreign Scan on public.s3  (cost=100.00..939.54 rows=2910 width=8)
    Output: log((value2)::double precision, '3'::double precision)
    Local server startup cost: 10
    Remote query: SELECT `value2` FROM `mysql_fdw_regress`.`s3` WHERE ((`value1` <> 1))
@@ -273,7 +275,7 @@ EXPLAIN VERBOSE
 SELECT log(value1, value2) FROM s3 WHERE value1 != 1;
                                            QUERY PLAN                                            
 -------------------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1262.50 rows=1000 width=8)
+ Foreign Scan on public.s3  (cost=100.00..755.38 rows=2264 width=8)
    Output: log(value1, (value2)::double precision)
    Local server startup cost: 10
    Remote query: SELECT `value1`, `value2` FROM `mysql_fdw_regress`.`s3` WHERE ((`value1` <> 1))
@@ -300,23 +302,283 @@ CONTEXT:  PL/pgSQL function log(double precision,double precision) line 3 at RAI
 --Testcase 29:
 EXPLAIN VERBOSE
 SELECT sum(value3),abs(sum(value3)) FROM s3;
-                                QUERY PLAN                                
---------------------------------------------------------------------------
- Aggregate  (cost=1015.00..1015.01 rows=1 width=16)
-   Output: sum(value3), abs(sum(value3))
-   ->  Foreign Scan on public.s3  (cost=10.00..1010.00 rows=1000 width=8)
-         Output: id, tag1, value1, value2, value3, value4, str1, str2
-         Local server startup cost: 10
-         Remote query: SELECT `value3` FROM `mysql_fdw_regress`.`s3`
-(6 rows)
+                                       QUERY PLAN                                       
+----------------------------------------------------------------------------------------
+ Foreign Scan  (cost=112.80..148.43 rows=1 width=16)
+   Output: (sum(value3)), (abs(sum(value3)))
+   Local server startup cost: 10
+   Remote query: SELECT sum(`value3`), abs(sum(`value3`)) FROM `mysql_fdw_regress`.`s3`
+(4 rows)
 
 -- select abs as nest function with agg (pushdown, result)
 --Testcase 30:
 SELECT sum(value3),abs(sum(value3)) FROM s3;
- sum  | abs 
-------+-----
- -7.2 | 7.2
+        sum         |        abs        
+--------------------+-------------------
+ -7.200000040233135 | 7.200000040233135
 (1 row)
+
+-- test aggregation (sum, count, avg) with time interval
+--Testcase 56:
+SELECT * FROM s4;
+ id |    c1    
+----+----------
+  0 | 12:10:30
+  1 | 23:12:13
+  2 | 11:12:12
+(3 rows)
+
+-- sum and time without casting to interval
+--Testcase 57:
+EXPLAIN VERBOSE
+SELECT sum(c1) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=117.06..156.31 rows=200 width=20)
+   Output: ((sum((c1)::interval)) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT sum(TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 58:
+SELECT sum(c1) + '24:10:10'::interval FROM s4 GROUP BY id;
+          ?column?          
+----------------------------
+ @ 36 hours 20 mins 40 secs
+ @ 47 hours 22 mins 23 secs
+ @ 35 hours 22 mins 22 secs
+(3 rows)
+
+-- sum and time with casting to interval
+--Testcase 59:
+EXPLAIN VERBOSE
+SELECT sum(c1::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=117.06..156.31 rows=200 width=20)
+   Output: ((sum((c1)::interval)) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT sum(TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 60:
+SELECT sum(c1::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+          ?column?          
+----------------------------
+ @ 36 hours 20 mins 40 secs
+ @ 47 hours 22 mins 23 secs
+ @ 35 hours 22 mins 22 secs
+(3 rows)
+
+-- sum and time with interval const and without casting to interval
+--Testcase 61:
+EXPLAIN VERBOSE
+SELECT sum(c1 + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=122.75..162.00 rows=200 width=20)
+   Output: ((sum(((c1 + '@ 24 hours 10 mins 10 secs'::interval))::interval)) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT sum((TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6) + 87010.0)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 62:
+SELECT sum(c1 + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+          ?column?          
+----------------------------
+ @ 60 hours 30 mins 50 secs
+ @ 71 hours 32 mins 33 secs
+ @ 59 hours 32 mins 32 secs
+(3 rows)
+
+-- sum and time with interval const and with casting to interval
+--Testcase 63:
+EXPLAIN VERBOSE
+SELECT sum(c1::interval + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=122.75..162.00 rows=200 width=20)
+   Output: ((sum(((c1)::interval + '@ 24 hours 10 mins 10 secs'::interval))) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT sum((TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6) + 87010.0)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 64:
+SELECT sum(c1::interval + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+          ?column?          
+----------------------------
+ @ 60 hours 30 mins 50 secs
+ @ 71 hours 32 mins 33 secs
+ @ 59 hours 32 mins 32 secs
+(3 rows)
+
+-- sum and time with milisecond
+--Testcase 66:
+EXPLAIN VERBOSE
+SELECT sum(c1::interval + '24:10:10.123456'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=122.75..162.00 rows=200 width=20)
+   Output: ((sum(((c1)::interval + '@ 24 hours 10 mins 10.123456 secs'::interval))) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT sum((TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6) + 87010.123456)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 67:
+SELECT sum(c1::interval + '24:10:10.123456'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+             ?column?              
+-----------------------------------
+ @ 60 hours 30 mins 50.123456 secs
+ @ 71 hours 32 mins 33.123456 secs
+ @ 59 hours 32 mins 32.123456 secs
+(3 rows)
+
+-- avg and time without casting to interval
+--Testcase 68:
+EXPLAIN VERBOSE
+SELECT avg(c1) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=117.06..156.81 rows=200 width=20)
+   Output: ((avg((c1)::interval)) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT avg(TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 69:
+SELECT avg(c1) + '24:10:10'::interval FROM s4 GROUP BY id;
+          ?column?          
+----------------------------
+ @ 36 hours 20 mins 40 secs
+ @ 47 hours 22 mins 23 secs
+ @ 35 hours 22 mins 22 secs
+(3 rows)
+
+-- avg and time with casting to interval
+--Testcase 70:
+EXPLAIN VERBOSE
+SELECT avg(c1::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=117.06..156.81 rows=200 width=20)
+   Output: ((avg((c1)::interval)) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT avg(TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 71:
+SELECT avg(c1::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+          ?column?          
+----------------------------
+ @ 36 hours 20 mins 40 secs
+ @ 47 hours 22 mins 23 secs
+ @ 35 hours 22 mins 22 secs
+(3 rows)
+
+-- avg and time with interval const and without casting to interval
+--Testcase 72:
+EXPLAIN VERBOSE
+SELECT avg(c1 + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=122.75..162.50 rows=200 width=20)
+   Output: ((avg(((c1 + '@ 24 hours 10 mins 10 secs'::interval))::interval)) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT avg((TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6) + 87010.0)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 74:
+SELECT avg(c1 + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+          ?column?          
+----------------------------
+ @ 60 hours 30 mins 50 secs
+ @ 71 hours 32 mins 33 secs
+ @ 59 hours 32 mins 32 secs
+(3 rows)
+
+-- avg and time with interval const and with casting to interval
+--Testcase 75:
+EXPLAIN VERBOSE
+SELECT avg(c1::interval + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=122.75..162.50 rows=200 width=20)
+   Output: ((avg(((c1)::interval + '@ 24 hours 10 mins 10 secs'::interval))) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT avg((TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6) + 87010.0)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 76:
+SELECT avg(c1::interval + '24:10:10'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+          ?column?          
+----------------------------
+ @ 60 hours 30 mins 50 secs
+ @ 71 hours 32 mins 33 secs
+ @ 59 hours 32 mins 32 secs
+(3 rows)
+
+-- avg and time with milisecond
+--Testcase 77:
+EXPLAIN VERBOSE
+SELECT avg(c1::interval + '24:10:10.123456'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=122.75..162.50 rows=200 width=20)
+   Output: ((avg(((c1)::interval + '@ 24 hours 10 mins 10.123456 secs'::interval))) + '@ 24 hours 10 mins 10 secs'::interval), id
+   Local server startup cost: 10
+   Remote query: SELECT avg((TIME_TO_SEC(`c1`) + ROUND(MICROSECOND(`c1`)/1000000, 6) + 87010.123456)), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 78:
+SELECT avg(c1::interval + '24:10:10.123456'::interval) + '24:10:10'::interval FROM s4 GROUP BY id;
+             ?column?              
+-----------------------------------
+ @ 60 hours 30 mins 50.123456 secs
+ @ 71 hours 32 mins 33.123456 secs
+ @ 59 hours 32 mins 32.123456 secs
+(3 rows)
+
+-- count with cast to interval
+--Testcase 79:
+EXPLAIN VERBOSE
+SELECT count(c1::interval) FROM s4 GROUP BY id;
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Foreign Scan  (cost=117.06..155.81 rows=200 width=12)
+   Output: (count((c1)::interval)), id
+   Local server startup cost: 10
+   Remote query: SELECT count(`c1`), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 80:
+SELECT count(c1::interval) FROM s4 GROUP BY id;
+ count 
+-------
+     1
+     1
+     1
+(3 rows)
+
+-- count without cast to interval
+--Testcase 81:
+EXPLAIN VERBOSE
+SELECT count(c1) FROM s4 GROUP BY id;
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Foreign Scan  (cost=111.38..150.12 rows=200 width=12)
+   Output: (count(c1)), id
+   Local server startup cost: 10
+   Remote query: SELECT count(`c1`), `id` FROM `mysql_fdw_regress`.`s4` GROUP BY 2
+(4 rows)
+
+--Testcase 82:
+SELECT count(c1) FROM s4 GROUP BY id;
+ count 
+-------
+     1
+     1
+     1
+(3 rows)
 
 -- select abs as nest with log2 (pushdown, explain)
 -- EXPLAIN VERBOSE
@@ -329,7 +591,7 @@ EXPLAIN VERBOSE
 SELECT abs(value3), pi(), 4.1 FROM s3;
                              QUERY PLAN                              
 ---------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1012.50 rows=1000 width=48)
+ Foreign Scan on public.s3  (cost=100.00..193.20 rows=2560 width=48)
    Output: abs(value3), '3.141592653589793'::double precision, 4.1
    Local server startup cost: 10
    Remote query: SELECT `value3` FROM `mysql_fdw_regress`.`s3`
@@ -352,15 +614,13 @@ SELECT abs(value3), pi(), 4.1 FROM s3;
 --Testcase 33:
 EXPLAIN VERBOSE
 SELECT sqrt(count(value1)), pi(), 4.1 FROM s3;
-                                          QUERY PLAN                                           
------------------------------------------------------------------------------------------------
- Aggregate  (cost=1012.50..1012.51 rows=1 width=48)
-   Output: sqrt((count(value1))::double precision), '3.141592653589793'::double precision, 4.1
-   ->  Foreign Scan on public.s3  (cost=10.00..1010.00 rows=1000 width=8)
-         Output: id, tag1, value1, value2, value3, value4, str1, str2
-         Local server startup cost: 10
-         Remote query: SELECT `value1` FROM `mysql_fdw_regress`.`s3`
-(6 rows)
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=106.40..142.03 rows=1 width=48)
+   Output: (sqrt((count(value1))::double precision)), '3.141592653589793'::double precision, 4.1
+   Local server startup cost: 10
+   Remote query: SELECT sqrt(count(`value1`)), 3.141592653589793, 4.1 FROM `mysql_fdw_regress`.`s3`
+(4 rows)
 
 -- select sqrt as nest function with agg and explicit constant (pushdown, result)
 --Testcase 34:
@@ -390,16 +650,13 @@ LINE 2: SELECT sqrt(count(value1)), pi(), 4.1, tag1 FROM s3;
 --Testcase 36:
 EXPLAIN VERBOSE
 SELECT value1, abs(1-value1) FROM s3 order by abs(1-value1);
-                                QUERY PLAN                                 
----------------------------------------------------------------------------
- Sort  (cost=1064.83..1067.33 rows=1000 width=16)
-   Output: value1, (abs(('1'::double precision - value1)))
-   Sort Key: (abs(('1'::double precision - s3.value1)))
-   ->  Foreign Scan on public.s3  (cost=10.00..1015.00 rows=1000 width=16)
-         Output: value1, abs(('1'::double precision - value1))
-         Local server startup cost: 10
-         Remote query: SELECT `value1` FROM `mysql_fdw_regress`.`s3`
-(7 rows)
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.s3  (cost=100.00..206.72 rows=2560 width=16)
+   Output: value1, abs(('1'::double precision - value1))
+   Local server startup cost: 10
+   Remote query: SELECT `value1` FROM `mysql_fdw_regress`.`s3` ORDER BY abs((1 - `value1`)) IS NULL ASC, abs((1 - `value1`)) ASC
+(4 rows)
 
 -- select abs with order by (result)
 --Testcase 37:
@@ -469,7 +726,7 @@ EXPLAIN VERBOSE
 SELECT abs(value1) + 1, value2, tag1, sqrt(value2) FROM s3;
                                            QUERY PLAN                                            
 -------------------------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1020.00 rows=1000 width=52)
+ Foreign Scan on public.s3  (cost=100.00..158.16 rows=1204 width=52)
    Output: (abs(value1) + '1'::double precision), value2, tag1, sqrt((value2)::double precision)
    Local server startup cost: 10
    Remote query: SELECT `tag1`, `value1`, `value2` FROM `mysql_fdw_regress`.`s3`
@@ -492,25 +749,20 @@ SELECT abs(value1) + 1, value2, tag1, sqrt(value2) FROM s3;
 --Testcase 43:
 EXPLAIN VERBOSE
 SELECT abs(value1), abs(value3), sqrt(value2) FROM s3 ORDER BY abs(value3) LIMIT 1;
-                                          QUERY PLAN                                           
------------------------------------------------------------------------------------------------
- Limit  (cost=1025.00..1025.00 rows=1 width=24)
+                                                                           QUERY PLAN                                                                            
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.s3  (cost=100.00..100.05 rows=1 width=24)
    Output: (abs(value1)), (abs(value3)), (sqrt((value2)::double precision))
-   ->  Sort  (cost=1025.00..1027.50 rows=1000 width=24)
-         Output: (abs(value1)), (abs(value3)), (sqrt((value2)::double precision))
-         Sort Key: (abs(s3.value3))
-         ->  Foreign Scan on public.s3  (cost=10.00..1020.00 rows=1000 width=24)
-               Output: abs(value1), abs(value3), sqrt((value2)::double precision)
-               Local server startup cost: 10
-               Remote query: SELECT `value1`, `value2`, `value3` FROM `mysql_fdw_regress`.`s3`
-(9 rows)
+   Local server startup cost: 10
+   Remote query: SELECT abs(`value1`), abs(`value3`), sqrt(`value2`) FROM `mysql_fdw_regress`.`s3` ORDER BY abs(`value3`) IS NULL ASC, abs(`value3`) ASC LIMIT 1
+(4 rows)
 
 -- select with order by limit (explain)
 --Testcase 44:
 SELECT abs(value1), abs(value3), sqrt(value2) FROM s3 ORDER BY abs(value3) LIMIT 1;
- abs | abs | sqrt 
------+-----+------
- 0.1 | 0.1 |   10
+         abs         |         abs         | sqrt 
+---------------------+---------------------+------
+ 0.10000000149011612 | 0.10000000149011612 |   10
 (1 row)
 
 -- select mixing with non pushdown func (all not pushdown, explain)
@@ -519,7 +771,7 @@ EXPLAIN VERBOSE
 SELECT abs(value1), sqrt(value2), chr(id+40) FROM s3;
                                   QUERY PLAN                                   
 -------------------------------------------------------------------------------
- Foreign Scan on public.s3  (cost=10.00..1022.50 rows=1000 width=48)
+ Foreign Scan on public.s3  (cost=100.00..197.04 rows=2048 width=48)
    Output: abs(value1), sqrt((value2)::double precision), chr((id + 40))
    Local server startup cost: 10
    Remote query: SELECT `id`, `value1`, `value2` FROM `mysql_fdw_regress`.`s3`
@@ -540,6 +792,8 @@ SELECT abs(value1), sqrt(value2), chr(id+40) FROM s3;
 
 --Testcase 47:
 DROP FOREIGN TABLE s3;
+--Testcase 65:
+DROP FOREIGN TABLE s4;
 -- full text search table
 --Testcase 48:
 CREATE FOREIGN TABLE ftextsearch(id int, content text) SERVER server1 OPTIONS(dbname 'mysql_fdw_regress', table_name 'ftextsearch');
@@ -549,7 +803,7 @@ EXPLAIN VERBOSE
 SELECT MATCH_AGAINST(ARRAY[content, 'success catches']) AS score, content FROM ftextsearch WHERE MATCH_AGAINST(ARRAY[content, 'success catches','IN BOOLEAN MODE']) != 0;
                                                                       QUERY PLAN                                                                       
 -------------------------------------------------------------------------------------------------------------------------------------------------------
- Foreign Scan on public.ftextsearch  (cost=10.00..1260.00 rows=1000 width=40)
+ Foreign Scan on public.ftextsearch  (cost=100.00..886.62 rows=1455 width=40)
    Output: match_against(ARRAY[content, 'success catches'::text]), content
    Local server startup cost: 10
    Remote query: SELECT `content` FROM `mysql_fdw_regress`.`ftextsearch` WHERE ((MATCH (`content`) AGAINST ( 'success catches' IN BOOLEAN MODE) <> 0))
@@ -568,6 +822,39 @@ SELECT MATCH_AGAINST(ARRAY[content, 'success catches']) AS score, content FROM f
 
 --Testcase 51:
 DROP FOREIGN TABLE ftextsearch;
+--Testcase 83:
+CREATE FOREIGN TABLE s5(id int, b bit, b8 bit(8), b64 bit(64)) SERVER server1 OPTIONS(dbname 'mysql_fdw_regress', table_name 's5');
+--Testcase 84:
+SELECT * FROM s5;
+ id | b |  b8  |                               b64                               
+----+---+------+-----------------------------------------------------------------
+  0 | 1 | 1101 | 111111111111111111111111111111111111111111111111100000000000001
+  1 | 0 | 1001 | 111111111111111111111111111111111111111111000001100000111000001
+  2 | 1 | 1110 | 111111111111111111111111111111111101010101111111100000000000001
+(3 rows)
+
+-- select bit_and, bit_or (pushdown, explain)
+--Testcase 85:
+EXPLAIN VERBOSE
+SELECT bit_and(b), bit_and(b8), bit_or(b), bit_or(b8), bit_and(b64), bit_or(b64) FROM s5;
+                                                                                                                 QUERY PLAN                                                                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=121.18..145.33 rows=1 width=192)
+   Output: (bit_and(b)), (bit_and(b8)), (bit_or(b)), (bit_or(b8)), (bit_and(b64)), (bit_or(b64))
+   Local server startup cost: 10
+   Remote query: SELECT CAST(bit_and(`b`) AS SIGNED), CAST(bit_and(`b8`) AS SIGNED), CAST(bit_or(`b`) AS SIGNED), CAST(bit_or(`b8`) AS SIGNED), CAST(bit_and(`b64`) AS SIGNED), CAST(bit_or(`b64`) AS SIGNED) FROM `mysql_fdw_regress`.`s5`
+(4 rows)
+
+-- select bit_and, bit_or (pushdown, result)
+--Testcase 86:
+SELECT bit_and(b), bit_and(b8), bit_or(b), bit_or(b8), bit_and(b64), bit_or(b64) FROM s5;
+ bit_and | bit_and | bit_or | bit_or |                             bit_and                             |                             bit_or                              
+---------+---------+--------+--------+-----------------------------------------------------------------+-----------------------------------------------------------------
+ 0       | 1000    | 1      | 1111   | 111111111111111111111111111111111101010101000001100000000000001 | 111111111111111111111111111111111111111111111111100000111000001
+(1 row)
+
+--Testcase 87:
+DROP FOREIGN TABLE s5;
 --Testcase 52:
 DROP USER MAPPING FOR CURRENT_USER SERVER server1;
 --Testcase 53:

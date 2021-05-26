@@ -1,7 +1,11 @@
 \set ECHO none
+\ir sql/parameters.conf
+\set ECHO all
+
 -- Before running this file User must create database mysql_fdw_regress on
 -- MySQL with all permission for 'edb' user with 'edb' password and ran
 -- mysql_init.sh file to create tables.
+
 \c contrib_regression
 --Testcase 1:
 CREATE EXTENSION IF NOT EXISTS mysql_fdw;
@@ -11,16 +15,13 @@ CREATE SERVER mysql_svr FOREIGN DATA WRAPPER mysql_fdw
 --Testcase 3:
 CREATE USER MAPPING FOR public SERVER mysql_svr
   OPTIONS (username :MYSQL_USER_NAME, password :MYSQL_PASS);
+
 -- Validate extension, server and mapping details
 --Testcase 4:
 SELECT e.fdwname as "Extension", srvname AS "Server", s.srvoptions AS "Server_Options", u.umoptions AS "User_Mapping_Options"
   FROM pg_foreign_data_wrapper e LEFT JOIN pg_foreign_server s ON e.oid = s.srvfdw LEFT JOIN pg_user_mapping u ON s.oid = u.umserver
   WHERE e.fdwname = 'mysql_fdw'
   ORDER BY 1, 2, 3, 4;
- Extension |  Server   |       Server_Options       |    User_Mapping_Options     
------------+-----------+----------------------------+-----------------------------
- mysql_fdw | mysql_svr | {host=localhost,port=3306} | {username=edb,password=edb}
-(1 row)
 
 -- Create foreign table and perform basic SQL operations
 --Testcase 5:
@@ -28,39 +29,18 @@ CREATE FOREIGN TABLE f_mysql_test(a int, b int)
   SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_regress', table_name 'mysql_test');
 --Testcase 6:
 SELECT a, b FROM f_mysql_test ORDER BY 1, 2;
- a | b 
----+---
- 1 | 1
-(1 row)
-
 --Testcase 7:
 INSERT INTO f_mysql_test (a, b) VALUES (2, 2);
 --Testcase 8:
 SELECT a, b FROM f_mysql_test ORDER BY 1, 2;
- a | b 
----+---
- 1 | 1
- 2 | 2
-(2 rows)
-
 --Testcase 9:
 UPDATE f_mysql_test SET b = 3 WHERE a = 2;
 --Testcase 10:
 SELECT a, b FROM f_mysql_test ORDER BY 1, 2;
- a | b 
----+---
- 1 | 1
- 2 | 3
-(2 rows)
-
 --Testcase 11:
 DELETE FROM f_mysql_test WHERE a = 2;
 --Testcase 12:
 SELECT a, b FROM f_mysql_test ORDER BY 1, 2;
- a | b 
----+---
- 1 | 1
-(1 row)
 
 --Testcase 13:
 DROP FOREIGN TABLE f_mysql_test;
@@ -68,6 +48,7 @@ DROP FOREIGN TABLE f_mysql_test;
 DROP USER MAPPING FOR public SERVER mysql_svr;
 --Testcase 15:
 DROP SERVER mysql_svr;
+
 -- Server with init_command.
 --Testcase 16:
 CREATE SERVER mysql_svr1 FOREIGN DATA WRAPPER mysql_fdw
@@ -81,10 +62,6 @@ CREATE FOREIGN TABLE f_mysql_test (a int, b int)
 -- This will create init_command_check table in mysql_fdw_regress database.
 --Testcase 19:
 SELECT a, b FROM f_mysql_test ORDER BY 1, 2;
- a | b 
----+---
- 1 | 1
-(1 row)
 
 -- init_command_check table created mysql_fdw_regress database can be verified
 -- by creating corresponding foreign table here.
@@ -93,19 +70,11 @@ CREATE FOREIGN TABLE f_init_command_check(a int)
   SERVER mysql_svr1 OPTIONS (dbname 'mysql_fdw_regress', table_name 'init_command_check');
 --Testcase 21:
 SELECT a FROM f_init_command_check ORDER BY 1;
- a 
----
-(0 rows)
-
 -- Changing init_command to drop init_command_check table from
 -- mysql_fdw_regress database
 ALTER SERVER mysql_svr1 OPTIONS (SET init_command 'drop table init_command_check');
 --Testcase 22:
 SELECT a, b FROM f_mysql_test;
- a | b 
----+---
- 1 | 1
-(1 row)
 
 --Testcase 23:
 DROP FOREIGN TABLE f_init_command_check;
@@ -115,6 +84,7 @@ DROP FOREIGN TABLE f_mysql_test;
 DROP USER MAPPING FOR public SERVER mysql_svr1;
 --Testcase 26:
 DROP SERVER mysql_svr1;
+
 -- Server with use_remote_estimate.
 --Testcase 27:
 CREATE SERVER mysql_svr1 FOREIGN DATA WRAPPER mysql_fdw
@@ -125,20 +95,11 @@ CREATE USER MAPPING FOR public SERVER mysql_svr1
 --Testcase 29:
 CREATE FOREIGN TABLE f_mysql_test(a int, b int)
   SERVER mysql_svr1 OPTIONS(dbname 'mysql_fdw_regress', table_name 'mysql_test');
+
 -- Below explain will return actual rows from MySQL, but keeping costs off
 -- here for consistent regression result.
 --Testcase 30:
 EXPLAIN (VERBOSE, COSTS OFF) SELECT a FROM f_mysql_test WHERE a < 2 ORDER BY 1;
-                                        QUERY PLAN                                        
-------------------------------------------------------------------------------------------
- Sort
-   Output: a
-   Sort Key: f_mysql_test.a
-   ->  Foreign Scan on public.f_mysql_test
-         Output: a
-         Local server startup cost: 10
-         Remote query: SELECT `a` FROM `mysql_fdw_regress`.`mysql_test` WHERE ((`a` < 2))
-(7 rows)
 
 --Testcase 31:
 DROP FOREIGN TABLE f_mysql_test;
@@ -146,6 +107,7 @@ DROP FOREIGN TABLE f_mysql_test;
 DROP USER MAPPING FOR public SERVER mysql_svr1;
 --Testcase 33:
 DROP SERVER mysql_svr1;
+
 -- Create server with secure_auth.
 --Testcase 34:
 CREATE SERVER mysql_svr1 FOREIGN DATA WRAPPER mysql_fdw
@@ -156,21 +118,17 @@ CREATE USER MAPPING FOR public SERVER mysql_svr1
 --Testcase 36:
 CREATE FOREIGN TABLE f_mysql_test(a int, b int)
   SERVER mysql_svr1 OPTIONS(dbname 'mysql_fdw_regress', table_name 'mysql_test');
+
 -- Below should fail with Warning of secure_auth is false.
 --Testcase 37:
 SELECT a, b FROM f_mysql_test ORDER BY 1, 2;
-WARNING:  MySQL secure authentication is off
- a | b 
----+---
- 1 | 1
-(1 row)
-
 --Testcase 38:
 DROP FOREIGN TABLE f_mysql_test;
 --Testcase 39:
 DROP USER MAPPING FOR public SERVER mysql_svr1;
 --Testcase 40:
 DROP SERVER mysql_svr1;
+
 -- Cleanup
 --Testcase 41:
 DROP EXTENSION mysql_fdw;

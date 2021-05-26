@@ -25,7 +25,7 @@
 #include "utils/rel.h"
 
 
-Datum mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column *column);
+Datum mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column *column, MYSQL_FIELD field);
 void mysql_bind_sql_var(Oid type, int attnum, Datum value, MYSQL_BIND *binds,
 						bool *isnull);
 void mysql_bind_result(Oid pgtyp, int pgtypmod, MYSQL_FIELD *field,
