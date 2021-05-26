@@ -76,6 +76,19 @@ foreign table. The latest version does the column push-down and only
 brings back the columns that are part of the select target list. This is
 a performance feature.
 
+### GROUP BY, HAVING clause push-down
+The group by, having clause will be pushed-down to the foreign server that reduce the row and column to bring across to PostgreSQL.
+### LIMIT OFFSET clause push-down
+The limit offset clause will be pushed-down to the foreign server that will enhance performance.
+### Aggregation function push-down
+List of aggregate functions push-down:
+```
+avg, bit_and, bit_or, count, json_agg, json_object_agg, max, min, stddev, stddev_pop, stddev_samp, sum, var_pop, var_samp, variance.
+```
+### JOIN clause push-down
+The latest version will push-down the foreign table join clauses (LEFT JOIN, RIGHT JOIN and JOIN_INNER) to
+the foreign server.
+
 ### Prepared Statement
 (Refactoring for `select` queries to use prepared statement)
 

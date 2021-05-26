@@ -10,7 +10,7 @@ OBJS = connection.o option.o deparse.o mysql_query.o mysql_fdw.o
 EXTENSION = mysql_fdw
 DATA = mysql_fdw--1.0.sql mysql_fdw--1.1.sql mysql_fdw--1.0--1.1.sql
 
-REGRESS = server_options connection_validation dml select pushdown selectfunc
+REGRESS = server_options connection_validation dml select pushdown selectfunc mysql_fdw_post extra/aggregates
 
 MYSQL_CONFIG = mysql_config
 PG_CPPFLAGS := $(shell $(MYSQL_CONFIG) --include)
@@ -51,3 +51,11 @@ include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
+ifdef REGRESS_PREFIX
+REGRESS_PREFIX_SUB = $(REGRESS_PREFIX)
+else
+REGRESS_PREFIX_SUB = $(VERSION)
+endif
+
+REGRESS := $(addprefix $(REGRESS_PREFIX_SUB)/,$(REGRESS))
+$(shell mkdir -p results/$(REGRESS_PREFIX_SUB)/extra)

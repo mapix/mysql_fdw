@@ -31,7 +31,7 @@ SELECT * FROM f_mysql_test ORDER BY 1, 2;
 ALTER SERVER mysql_svr OPTIONS (SET host 'localhos');
 --Testcase 6:
 SELECT * FROM f_mysql_test ORDER BY 1, 2;
-ERROR:  failed to connect to MySQL: Unknown MySQL server host 'localhos' (2)
+ERROR:  failed to connect to MySQL: Unknown MySQL server host 'localhos' (110)
 -- Set the correct host-name, next operation should succeed.
 ALTER SERVER mysql_svr OPTIONS (SET host :MYSQL_HOST);
 --Testcase 7:

@@ -12,6 +12,8 @@ MYSQL_USER_NAME="edb"
 # --run below
 # CREATE DATABASE mysql_fdw_regress;
 # CREATE DATABASE mysql_fdw_regress1;
+# CREATE DATABASE mysql_fdw_post;
+# CREATE DATABASE mysql_fdw_core;
 # SET GLOBAL validate_password.policy = LOW;
 # SET GLOBAL validate_password.length = 1;
 # SET GLOBAL validate_password.mixed_case_count = 0;
@@ -20,6 +22,17 @@ MYSQL_USER_NAME="edb"
 # CREATE USER 'edb'@'localhost' IDENTIFIED BY 'edb';
 # GRANT ALL PRIVILEGES ON mysql_fdw_regress.* TO 'edb'@'localhost';
 # GRANT ALL PRIVILEGES ON mysql_fdw_regress1.* TO 'edb'@'localhost';
+# GRANT ALL PRIVILEGES ON mysql_fdw_post.* TO 'edb'@'localhost';
+# GRANT ALL PRIVILEGES ON mysql_fdw_core.* TO 'edb'@'localhost';
+# GRANT SUPER ON *.* TO 'edb'@localhost;
+
+# Set time zone to default time zone of make check PST.
+# SET GLOBAL time_zone = '-8:00';
+# SET GLOBAL log_bin_trust_function_creators = 1;
+# SET GLOBAL local_infile=1;
+
+rm -rf /tmp/*.data
+cp -a sql/init_data/*.data /tmp/
 
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -P $MYSQL_PORT -D mysql_fdw_regress -e "DROP TABLE IF EXISTS mysql_test;"
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -P $MYSQL_PORT -D mysql_fdw_regress -e "DROP TABLE IF EXISTS empdata;"
@@ -54,6 +67,20 @@ mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e 
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO s3 VALUES (4, 'b', 2.2, 200, -2.2, -200, '---XYZ---', '   XYZ   ');"
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO s3 VALUES (5, 'b', 3.3, 200, -3.3, -200, '---XYZ---', '   XYZ   ');"
 
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -P $MYSQL_PORT -D mysql_fdw_regress -e "DROP TABLE IF EXISTS s4;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "CREATE TABLE s4(id int PRIMARY KEY, c1 time);"
+
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO s4 VALUES (0, '12:10:30.123456');"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO s4 VALUES (1, '23:12:12.654321');"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO s4 VALUES (2, '11:12:12.112233');"
+
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -P $MYSQL_PORT -D mysql_fdw_regress -e "DROP TABLE IF EXISTS s5;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "CREATE TABLE s5(id int PRIMARY KEY, b bit, b8 bit(8), b64 bit(64));"
+
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO s5 VALUES (0, b'1', b'1101', b'0111111111111111111111111111111111111111111111111100000000000001');"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO s5 VALUES (1, b'0', b'1001', b'0111111111111111111111111111111111111111111000001100000111000001');"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO s5 VALUES (2, b'1', b'1110', b'0111111111111111111111111111111111101010101111111100000000000001');"
+
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -P $MYSQL_PORT -D mysql_fdw_regress -e "DROP TABLE IF EXISTS ftextsearch;"
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "CREATE TABLE ftextsearch(id int UNSIGNED AUTO_INCREMENT NOT NULL PRIMARY KEY, content TEXT, FULLTEXT (content));"
 
@@ -61,3 +88,54 @@ mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e 
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO ftextsearch (content) VALUES ('Failure teaches success.');"
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO ftextsearch (content) VALUES ('It is no use cring over spilt mik.');"
 mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_regress -e "INSERT INTO ftextsearch (content) VALUES ('The early bird catches the worm.');"
+
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS \`T 0\`;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS \`T 1\`;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS test;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS \`T 2\`;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS \`T 3\`;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS \`T 4\`;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS base_tbl;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loc1;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct1;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct2;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct3;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct4;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct5;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct6;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct7;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct8;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS gloc1;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS a;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct9;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS parent_tbl;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct31;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct41;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "DROP TABLE IF EXISTS loct42;"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE \`T 0\` (\`C 1\` int PRIMARY KEY, c2 int NOT NULL, c3 text, c4 timestamp, c5 timestamp, c6 varchar(10), c7 char(10), c8 text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE \`T 1\` (\`C 1\` int PRIMARY KEY, c2 int NOT NULL, c3 text, c4 timestamp, c5 timestamp, c6 varchar(10), c7 char(10), c8 text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE test (c1 int PRIMARY KEY, c2 int NOT NULL, c3 text, c4 timestamp, c5 timestamp, c6 varchar(10), c7 char(10), c8 text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE \`T 2\` (c1 int, c2 text, CONSTRAINT t2_pkey PRIMARY KEY (c1));"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE \`T 3\` (c1 int, c2 int NOT NULL, c3 text, CONSTRAINT t3_pkey PRIMARY KEY (c1));"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE \`T 4\` (c1 int, c2 int NOT NULL, c3 text, CONSTRAINT t4_pkey PRIMARY KEY (c1));"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE base_tbl (a int, b int);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loc1 (f1 INTEGER, f2 text, id integer primary key auto_increment);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct (id integer primary key auto_increment,aa TEXT, bb TEXT);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct1 (id integer primary key auto_increment, f1 int, f2 int, f3 int);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct2 (id integer primary key auto_increment, f1 int, f2 int, f3 int);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct3 (a int, b text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct4 (a int, b text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct5 (a int check (a in (1)), b text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct6 (a int check (a in (2)), b text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct7 (a int check (a in (1)), b text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct8 (f1 text, f2 text, f3 text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE gloc1 (a int PRIMARY KEY, b int);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE a (aa TEXT);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct9 (aa TEXT, bb TEXT);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE parent_tbl (a int, b int);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct31 (f1 text, f2 text, f3 varchar(10));"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct41 (f1 int, f2 text);"
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_post -e "CREATE TABLE loct42 (f1 int, f2 text);"
+
+mysql -h $MYSQL_HOST -u $MYSQL_USER_NAME -D $MYSQL_PORT -D mysql_fdw_core --local-infile=1 < sql/init_data/init_core.sql

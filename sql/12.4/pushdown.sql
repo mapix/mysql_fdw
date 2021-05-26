@@ -166,6 +166,155 @@ SELECT c1, c2, c6, c8 FROM f_test_tbl1 e
   WHERE c3 LIKE 'MANA%'
   ORDER BY c1;
 
+-- Aggregate pushdown
+--Testcase 51:
+CREATE FOREIGN TABLE aggtest (
+  a       int2,
+  b     float4
+) SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_core', table_name 'aggtest');
+
+--Testcase 52:
+SELECT * FROM aggtest;
+
+--Testcase 53:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT avg(a) AS avg_32 FROM aggtest WHERE a < 100;
+--Testcase 54:
+SELECT avg(a) AS avg_32 FROM aggtest WHERE a < 100;
+
+--Testcase 55:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(a) AS sum_198 FROM aggtest;
+--Testcase 56:
+SELECT sum(a) AS sum_198 FROM aggtest;
+
+--Testcase 57:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(b) AS avg_431_773 FROM aggtest;
+--Testcase 58:
+SELECT sum(b) AS avg_431_773 FROM aggtest;
+
+--Testcase 59:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a) AS max_100 FROM aggtest;
+--Testcase 60:
+SELECT max(a) AS max_100 FROM aggtest;
+
+--Testcase 61:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(aggtest.b) AS max_324_78 FROM aggtest;
+--Testcase 62:
+SELECT max(aggtest.b) AS max_324_78 FROM aggtest;
+
+--Testcase 63:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT min(a) AS min_0 FROM aggtest;
+--Testcase 64:
+SELECT min(a) AS min_0 FROM aggtest;
+
+--Testcase 65:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT count(a) FROM aggtest;
+--Testcase 66:
+SELECT count(a) FROM aggtest;
+
+--Testcase 67:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT min(aggtest.b) AS min_7_8 FROM aggtest WHERE b > 5;
+--Testcase 68:
+SELECT min(aggtest.b) AS min_7_8 FROM aggtest WHERE b > 5;
+
+--Testcase 69:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT stddev_pop(b) FROM aggtest;
+--Testcase 70:
+SELECT stddev_pop(b) FROM aggtest;
+
+--Testcase 71:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT stddev_samp(b) FROM aggtest;
+--Testcase 72:
+SELECT stddev_samp(b) FROM aggtest;
+
+--Testcase 73:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT var_pop(b) FROM aggtest;
+--Testcase 74:
+SELECT var_pop(b) FROM aggtest;
+
+--Testcase 75:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT var_samp(b) FROM aggtest;
+--Testcase 76:
+SELECT var_samp(b) FROM aggtest;
+
+--Testcase 77:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT variance(b) FROM aggtest;
+--Testcase 78:
+SELECT variance(b) FROM aggtest;
+
+--Testcase 79:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT json_agg(a), json_agg(b) FROM aggtest;
+--Testcase 80:
+SELECT json_agg(a), json_agg(b) FROM aggtest;
+
+--Testcase 81:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT json_object_agg(a, b) FROM aggtest;
+--Testcase 82:
+SELECT json_object_agg(a, b) FROM aggtest;
+
+--Testcase 83:
+CREATE FOREIGN TABLE bitwise_test(
+  i2 INT2,
+  i4 INT4,
+  i8 INT8,
+  i INTEGER,
+  x INT2
+) SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_core', table_name 'bitwise_test');
+
+--Testcase 84:
+DELETE FROM bitwise_test;
+
+--Testcase 85:
+INSERT INTO bitwise_test VALUES
+  (1, 1, 1, 1, 1),
+  (3, 3, 3, null, 2),
+  (7, 7, 7, 3, 4);
+
+--Testcase 86:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT
+  BIT_AND(i2) AS "1",
+  BIT_AND(i4) AS "1",
+  BIT_AND(i8) AS "1",
+  BIT_AND(i)  AS "?",
+  BIT_AND(x)  AS "0",
+
+  BIT_OR(i2)  AS "7",
+  BIT_OR(i4)  AS "7",
+  BIT_OR(i8)  AS "7",
+  BIT_OR(i)   AS "?",
+  BIT_OR(x)   AS "7"
+FROM bitwise_test;
+
+--Testcase 87:
+SELECT
+  BIT_AND(i2) AS "1",
+  BIT_AND(i4) AS "1",
+  BIT_AND(i8) AS "1",
+  BIT_AND(i)  AS "?",
+  BIT_AND(x)  AS "0",
+
+  BIT_OR(i2)  AS "7",
+  BIT_OR(i4)  AS "7",
+  BIT_OR(i8)  AS "7",
+  BIT_OR(i)   AS "?",
+  BIT_OR(x)   AS "7"
+FROM bitwise_test;
+
 -- Cleanup
 --Testcase 44:
 DELETE FROM f_test_tbl1;
@@ -175,6 +324,10 @@ DELETE FROM f_test_tbl2;
 DROP FOREIGN TABLE f_test_tbl1;
 --Testcase 47:
 DROP FOREIGN TABLE f_test_tbl2;
+--Testcase 88:
+DROP FOREIGN TABLE aggtest;
+--Testcase 89:
+DROP FOREIGN TABLE bitwise_test;
 --Testcase 48:
 DROP USER MAPPING FOR public SERVER mysql_svr;
 --Testcase 49:

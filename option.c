@@ -45,9 +45,13 @@ static struct MySQLFdwOption valid_options[] =
 	{"password", UserMappingRelationId},
 	{"dbname", ForeignTableRelationId},
 	{"table_name", ForeignTableRelationId},
+	{"column_name", AttributeRelationId},
+	{"key", AttributeRelationId},
 	{"secure_auth", ForeignServerRelationId},
 	{"max_blob_size", ForeignTableRelationId},
 	{"use_remote_estimate", ForeignServerRelationId},
+	{"use_remote_estimate", ForeignTableRelationId},
+	{"extensions", ForeignServerRelationId},
 	{"ssl_key", ForeignServerRelationId},
 	{"ssl_cert", ForeignServerRelationId},
 	{"ssl_ca", ForeignServerRelationId},
@@ -207,6 +211,9 @@ mysql_get_options(Oid foreignoid)
 
 		if (strcmp(def->defname, "use_remote_estimate") == 0)
 			opt->use_remote_estimate = defGetBoolean(def);
+
+		if (strcmp(def->defname, "column_name") == 0)
+			opt->column_name = defGetString(def);
 
 		if (strcmp(def->defname, "ssl_key") == 0)
 			opt->ssl_key = defGetString(def);
