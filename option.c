@@ -4,7 +4,7 @@
  * 		FDW option handling for mysql_fdw
  *
  * Portions Copyright (c) 2012-2014, PostgreSQL Global Development Group
- * Portions Copyright (c) 2004-2020, EnterpriseDB Corporation.
+ * Portions Copyright (c) 2004-2021, EnterpriseDB Corporation.
  *
  * IDENTIFICATION
  * 		option.c
@@ -57,6 +57,15 @@ static struct MySQLFdwOption valid_options[] =
 	{"ssl_ca", ForeignServerRelationId},
 	{"ssl_capath", ForeignServerRelationId},
 	{"ssl_cipher", ForeignServerRelationId},
+#if (PG_VERSION_NUM >= 140000)
+	/* truncatable is available on both server and table */
+	{"truncatable", ForeignServerRelationId},
+	{"truncatable", ForeignTableRelationId},
+	/* batch_size is available on both server and table */
+	{"batch_size", ForeignServerRelationId},
+	{"batch_size", ForeignTableRelationId},
+	{"keep_connections", ForeignServerRelationId},
+#endif
 
 	/* Sentinel */
 	{NULL, InvalidOid}
@@ -110,6 +119,28 @@ mysql_fdw_validator(PG_FUNCTION_ARGS)
 					 errhint("Valid options in this context are: %s",
 							 buf.len ? buf.data : "<none>")));
 		}
+
+#if (PG_VERSION_NUM >= 140000)
+		if (strcmp(def->defname, "use_remote_estimate") == 0 ||
+			strcmp(def->defname, "truncatable") == 0 ||
+			strcmp(def->defname, "async_capable") == 0 ||
+			strcmp(def->defname, "keep_connections") == 0)
+		{
+			/* these accept only boolean values */
+			(void) defGetBoolean(def);
+		}
+		else if (strcmp(def->defname, "batch_size") == 0)
+		{
+			int			batch_size;
+
+			batch_size = strtol(defGetString(def), NULL, 10);
+			if (batch_size <= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("%s requires a positive integer value",
+								def->defname)));
+		}
+#endif
 	}
 
 	PG_RETURN_VOID();
@@ -137,7 +168,7 @@ mysql_is_valid_option(const char *option, Oid context)
  * Fetch the options for a mysql_fdw foreign table.
  */
 mysql_opt *
-mysql_get_options(Oid foreignoid)
+mysql_get_options(Oid foreignoid, bool is_foreigntable)
 {
 	ForeignTable *f_table;
 	ForeignServer *f_server;
@@ -151,17 +182,16 @@ mysql_get_options(Oid foreignoid)
 	/*
 	 * Extract options from FDW objects.
 	 */
-	PG_TRY();
+	if (is_foreigntable)
 	{
 		f_table = GetForeignTable(foreignoid);
 		f_server = GetForeignServer(f_table->serverid);
 	}
-	PG_CATCH();
+	else
 	{
 		f_table = NULL;
 		f_server = GetForeignServer(foreignoid);
 	}
-	PG_END_TRY();
 
 	f_mapping = GetUserMapping(GetUserId(), f_server->serverid);
 
@@ -236,12 +266,12 @@ mysql_get_options(Oid foreignoid)
 		opt->svr_address = "127.0.0.1";
 
 	if (!opt->svr_port)
-		opt->svr_port = MYSQL_PORT;
+		opt->svr_port = MYSQL_DEFAULT_SERVER_PORT;
 
 	/*
 	 * When we don't have a table name or database name provided in the
-	 * FOREIGN TABLE options, then use a foreign table name as the target table
-	 * name and the namespace of the foreign table as a database name.
+	 * FOREIGN TABLE options, then use a foreign table name as the target
+	 * table name and the namespace of the foreign table as a database name.
 	 */
 	if (f_table)
 	{
