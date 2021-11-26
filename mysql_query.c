@@ -4,7 +4,7 @@
  * 		Type handling for remote MySQL servers
  *
  * Portions Copyright (c) 2012-2014, PostgreSQL Global Development Group
- * Portions Copyright (c) 2004-2020, EnterpriseDB Corporation.
+ * Portions Copyright (c) 2004-2021, EnterpriseDB Corporation.
  *
  * IDENTIFICATION
  * 		mysql_query.c
@@ -49,15 +49,15 @@ x->second = y.tm_sec; \
 } while(0);
 
 static int32 mysql_from_pgtyp(Oid type);
-static char *dec_bin (unsigned long number, int sz);
-static int bin_dec(int binarynumber);
+static char *dec_bin(unsigned long number, int sz);
+static int	bin_dec(int binarynumber);
 
 /*
  * convert_mysql_to_pg:
  * 		Convert MySQL data into PostgreSQL's compatible data types
  */
 Datum
-mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column *column, MYSQL_FIELD field)
+mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column * column, MYSQL_FIELD field)
 {
 	Datum		value_datum;
 	Datum		valueDatum;
@@ -77,64 +77,66 @@ mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column *column, MYSQL_FIELD f
 
 	switch (pgtyp)
 	{
-		/*
-		 * MySQL gives BIT / BIT(n) data type as decimal value.  The only way
-		 * to retrieve this value is to use BIN, OCT or HEX function in MySQL,
-		 * otherwise mysql client shows the actual decimal value, which could
-		 * be a non - printable character.  For exmple in MySQL
-		 *
-		 * CREATE TABLE t (b BIT(8));
-		 * INSERT INTO t SET b = b'1001';
-		 * SELECT BIN(b) FROM t;
-		 * +--------+
-		 * | BIN(b) |
-		 * +--------+
-		 * | 1001   |
-		 * +--------+
-		 *
-		 * PostgreSQL expacts all binary data to be composed of either '0' or
-		 * '1'. MySQL gives value 9 hence PostgreSQL reports error.  The
-		 * solution is to convert the decimal number into equivalent binary
-		 * string.
-		 */
+			/*
+			 * MySQL gives BIT / BIT(n) data type as decimal value.  The only
+			 * way to retrieve this value is to use BIN, OCT or HEX function
+			 * in MySQL, otherwise mysql client shows the actual decimal
+			 * value, which could be a non - printable character.  For exmple
+			 * in MySQL
+			 *
+			 * CREATE TABLE t (b BIT(8));
+			 * INSERT INTO t SET b = b'1001';
+			 * SELECT BIN(b) FROM t;
+			 * +--------+
+			 * | BIN(b) |
+			 * +--------+
+			 * | 1001   |
+			 * +--------+
+			 *
+			 * PostgreSQL expacts all binary data to be composed of either '0'
+			 * or '1'. MySQL gives value 9 hence PostgreSQL reports error.
+			 * The solution is to convert the decimal number into equivalent
+			 * binary string.
+			 */
 		case BYTEAOID:
 			SET_VARSIZE(column->value, column->length + VARHDRSZ);
 			return PointerGetDatum(column->value);
 
 		case BITOID:
-		{
-			/*
-			 * For bit type, need to convert each character to binary 8 bit.
-			 */
-			char   *outputString = (char *) column->value;
-			int		i;
-
-			if (field.type == MYSQL_TYPE_BIT)
 			{
-				for (i = 0; i < strlen(outputString); i++)
+				/*
+				 * For bit type, need to convert each character to binary 8
+				 * bit.
+				 */
+				char	   *outputString = (char *) column->value;
+				int			i;
+
+				if (field.type == MYSQL_TYPE_BIT)
 				{
-					unsigned long v = (unsigned long) outputString[i];
+					for (i = 0; i < strlen(outputString); i++)
+					{
+						unsigned long v = (unsigned long) outputString[i];
 
-					sprintf(str, "%s%s", str, dec_bin(v, 8));
+						sprintf(str, "%s%s", str, dec_bin(v, 8));
+					}
 				}
+				else
+				{
+					unsigned long value = atoll(outputString);
+
+					sprintf(str, "%s", dec_bin(value, 64));
+				}
+
+				/* Remove leading zero */
+				while (str[0] == '0')
+					str++;
+
+				if (strcmp(str, "") == 0)
+					str[0] = '0';
+
+				valueDatum = CStringGetDatum((char *) str);
+				break;
 			}
-			else
-			{
-				unsigned long value = atoll(outputString);
-
-				sprintf(str, "%s", dec_bin(value, 64));
-			}
-
-			/* Remove leading zero */
-			while(str[0] == '0')
-				str++;
-
-			if (strcmp(str, "") == 0)
-				str[0] = '0';
-
-			valueDatum = CStringGetDatum((char *) str);
-			break;
-		}
 		default:
 			valueDatum = CStringGetDatum((char *) column->value);
 	}
@@ -169,8 +171,9 @@ mysql_from_pgtyp(Oid type)
 			return MYSQL_TYPE_DOUBLE;
 		case BOOLOID:
 			return MYSQL_TYPE_LONG;
-		/* TODO: We may have to add more type of array */
+			/* TODO: We may have to add more type of array */
 		case INT2ARRAYOID:
+		case INT4ARRAYOID:
 		case TEXTARRAYOID:
 		case BPCHAROID:
 		case VARCHAROID:
@@ -205,7 +208,7 @@ mysql_from_pgtyp(Oid type)
  * 		modify the target table (INSERT/UPDATE)
  */
 void
-mysql_bind_sql_var(Oid type, int attnum, Datum value, MYSQL_BIND *binds,
+mysql_bind_sql_var(Oid type, int attnum, Datum value, MYSQL_BIND * binds,
 				   bool *isnull)
 {
 	/* Clear the bind buffer and attributes */
@@ -305,8 +308,9 @@ mysql_bind_sql_var(Oid type, int attnum, Datum value, MYSQL_BIND *binds,
 				binds[attnum].buffer = bufptr;
 			}
 			break;
-		/* TODO: We may have to add more type of array */
+			/* TODO: We may have to add more type of array */
 		case INT2ARRAYOID:
+		case INT4ARRAYOID:
 		case TEXTARRAYOID:
 		case BPCHAROID:
 		case VARCHAROID:
@@ -435,14 +439,14 @@ mysql_bind_sql_var(Oid type, int attnum, Datum value, MYSQL_BIND *binds,
  * 		remote mysql table (SELECT)
  */
 void
-mysql_bind_result(Oid pgtyp, int pgtypmod, MYSQL_FIELD *field,
-				  mysql_column *column)
+mysql_bind_result(Oid pgtyp, int pgtypmod, MYSQL_FIELD * field,
+				  mysql_column * column)
 {
 	MYSQL_BIND *mbind = column->mysql_bind;
 
 #if MYSQL_VERSION_ID < 80000 || MARIADB_VERSION_ID >= 100000
-	mbind->is_null = (my_bool *) &column->is_null;
-	mbind->error = (my_bool *) &column->error;
+	mbind->is_null = (my_bool *) & column->is_null;
+	mbind->error = (my_bool *) & column->error;
 #else
 	mbind->is_null = &column->is_null;
 	mbind->error = &column->error;
@@ -467,14 +471,14 @@ mysql_bind_result(Oid pgtyp, int pgtypmod, MYSQL_FIELD *field,
 }
 
 static char *
-dec_bin (unsigned long number, int sz)
+dec_bin(unsigned long number, int sz)
 {
-	char  *str = palloc0(64 + 1);
-	char *p = str + 64;
-	int i;
+	char	   *str = palloc0(64 + 1);
+	char	   *p = str + 64;
+	int			i;
 
 	for (i = 0; i < sz; i++)
-		*(--p) = (number>>i & 1) ? '1' : '0';
+		*(--p) = (number >> i & 1) ? '1' : '0';
 
 	return p;
 }

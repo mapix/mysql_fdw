@@ -4,7 +4,7 @@
  * 		Query deparser for mysql_fdw
  *
  * Portions Copyright (c) 2012-2014, PostgreSQL Global Development Group
- * Portions Copyright (c) 2004-2020, EnterpriseDB Corporation.
+ * Portions Copyright (c) 2004-2021, EnterpriseDB Corporation.
  *
  * IDENTIFICATION
  * 		deparse.c
@@ -47,7 +47,7 @@
 /* Return true if integer type */
 #define IS_INTEGER_TYPE(typid) ((typid == INT2OID) || (typid == INT4OID) || (typid == INT8OID))
 
-static bool mysql_contain_immutable_functions_walker(Node *node, void *context);
+static bool mysql_contain_functions_walker(Node *node, void *context);
 
 /*
  * Global context for foreign_expr_walker's search of an expression tree.
@@ -75,8 +75,13 @@ typedef struct foreign_loc_cxt
 {
 	Oid			collation;		/* OID of current collation, if any */
 	FDWCollateState state;		/* state of current collation choice */
-	bool        can_skip_cast;  /* outer function can skip float cast */
-	bool		can_pushdown_interval;	/* time interval can be pushed down */
+	bool		can_skip_cast;	/* outer function can skip numeric cast */
+	bool		op_flag;		/* operator can be pushed down or not */
+	bool		can_pushdown_function;	/* true if query contains function
+										 * which can pushed down to remote
+										 * server */
+	bool		can_use_outercast;	/* true if inner function accept outer
+									 * cast */
 } foreign_loc_cxt;
 
 /*
@@ -91,9 +96,26 @@ typedef struct deparse_expr_cxt
 								 * a base relation. */
 	StringInfo	buf;			/* output buffer to append to */
 	List	  **params_list;	/* exprs that will become remote Params */
-	int         can_skip_cast;  /* outer function can skip float8/numeric cast */
-	bool		can_convert_time;	/* time interval need to be converted to second */
+	bool		can_skip_cast;	/* outer function can skip numeric cast
+								 * function */
+	bool		can_convert_time;	/* time interval need to be converted to
+									 * second */
+	bool		is_not_distinct_op; /* check operator is IS NOT DISTINCT or IS
+									 * DISTINCT  */
+	bool		is_not_add_array;	/* check if function has variadic argument
+									 * so will not add ARRAY[] */
+	bool		can_convert_unit_arg;	/* time interval need to be converted
+										 * to Unit Arguments of Mysql. */
+	bool		can_skip_convert_unit_arg;	/* outer function can skip time
+											 * interval cast function */
+	Oid			return_type;	/* return type Oid of outer cast function */
+	FuncExpr   *json_table_expr;	/* for json_table function */
 } deparse_expr_cxt;
+
+typedef struct pull_func_clause_context
+{
+	List	   *funclist;
+}			pull_func_clause_context;
 
 #define REL_ALIAS_PREFIX	"r"
 /* Handy macro to add relation name qualification */
@@ -108,11 +130,11 @@ typedef struct deparse_expr_cxt
 static void deparseExpr(Expr *expr, deparse_expr_cxt *context);
 static void mysql_deparse_from_expr(List *quals, deparse_expr_cxt *context);
 static void mysql_deparse_explicit_target_list(List *tlist,
-									  bool is_returning,
-									  List **retrieved_attrs,
-									  deparse_expr_cxt *context);
+											   bool is_returning,
+											   List **retrieved_attrs,
+											   deparse_expr_cxt *context);
 static void mysql_deparse_select_sql(List *tlist, bool is_subquery, List **retrieved_attrs,
-									deparse_expr_cxt *context);
+									 deparse_expr_cxt *context);
 static void mysql_deparse_subquery_target_list(deparse_expr_cxt *context);
 static void mysql_deparse_locking_clause(deparse_expr_cxt *context);
 static void mysql_deparse_from_expr_for_rel(StringInfo buf, PlannerInfo *root,
@@ -127,10 +149,10 @@ static void mysql_deparse_var(Var *node, deparse_expr_cxt *context);
 static void mysql_deparse_const(Const *node, deparse_expr_cxt *context);
 static void mysql_deparse_param(Param *node, deparse_expr_cxt *context);
 #if PG_VERSION_NUM < 120000
-static void mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context);
+static void mysql_deparse_array_ref(ArrayRef * node, deparse_expr_cxt *context);
 #else
-static void mysql_deparse_array_ref(SubscriptingRef *node,
-									deparse_expr_cxt *context);
+static void mysql_deparse_subscripting_ref(SubscriptingRef *node,
+										   deparse_expr_cxt *context);
 #endif
 static void mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context);
 static void mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context);
@@ -159,37 +181,405 @@ static void mysql_deparse_target_list(StringInfo buf,
 									  Relation rel,
 									  Bitmapset *attrs_used,
 									  bool qualify_col,
-									  List **retrieved_attrs,
-									  bool is_concat);
+									  List **retrieved_attrs);
 static void mysql_deparse_column_ref(StringInfo buf, int varno, int varattno,
 									 RangeTblEntry *rte, bool qualify_col);
 static bool mysql_deparse_op_divide(Expr *node, deparse_expr_cxt *context);
 static Node *mysql_deparse_sort_group_clause(Index ref, List *tlist, bool force_colno,
-									deparse_expr_cxt *context);
+											 deparse_expr_cxt *context);
+static void mysql_deparse_row_expr(RowExpr *node, deparse_expr_cxt *context);
 
 /*
  * Functions to construct string representation of a specific types.
  */
 static void deparse_interval(StringInfo buf, Datum datum);
 static void mysql_append_order_by_clause(List *pathkeys, bool has_final_sort,
-								deparse_expr_cxt *context);
+										 deparse_expr_cxt *context);
 static void mysql_append_limit_clause(deparse_expr_cxt *context);
 static void mysql_append_group_by_clause(List *tlist, deparse_expr_cxt *context);
 static void mysql_append_function_name(Oid funcid, deparse_expr_cxt *context);
+static void mysql_append_time_unit(Const *node, deparse_expr_cxt *context);
+static void mysql_append_agg_order_by(List *orderList, List *targetList, deparse_expr_cxt *context);
 
 /*
  * Helper functions
  */
 static bool mysql_is_subquery_var(Var *node, RelOptInfo *foreignrel,
-								   int *relno, int *colno);
+								  int *relno, int *colno);
 static void mysql_get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
-												 int *relno, int *colno);
-static void interval2sec(Datum datum, uint64 *second, int32 *microsecond);
+												int *relno, int *colno);
+static bool exist_in_function_list(char *funcname, const char **funclist);
+static bool mysql_is_unique_func(Oid funcid, char *in);
+static bool mysql_is_supported_builtin_func(Oid funcid, char *in);
+static bool starts_with(const char *pre, const char *str);
+static char *mysql_deparse_type_name(Oid type_oid, int32 typemod);
+static void mysql_deconstruct_constant_array(Const *node, bool **elem_nulls,
+											 Datum **elem_values, Oid *elmtype, int *num_elems);
+static bool mysql_pull_func_clause_walker(Node *node, pull_func_clause_context * context);
+static void mysql_deparse_const_array(Const *node, deparse_expr_cxt *context);
+static void mysql_deparse_target_json_table_func(FuncExpr *node, deparse_expr_cxt *context);
+static void mysql_append_json_table_func(FuncExpr *node, deparse_expr_cxt *context);
+static void mysql_append_json_value_func(FuncExpr *node, deparse_expr_cxt *context);
+static void mysql_append_memberof_func(FuncExpr *node, deparse_expr_cxt *context);
+static void mysql_append_convert_function(FuncExpr *node, deparse_expr_cxt *context);
+static void mysql_deparse_numeric_cast(FuncExpr *node, deparse_expr_cxt *context);
+static void mysql_deparse_string_cast(FuncExpr *node, deparse_expr_cxt *context, char *proname);
+static void mysql_deparse_datetime_cast(FuncExpr *node, deparse_expr_cxt *context, char *proname);
+static void mysql_deparse_func_expr_match_against(FuncExpr *node, deparse_expr_cxt *context,
+												  StringInfo buf, char *proname);
+static void mysql_deparse_func_expr_position(FuncExpr *node, deparse_expr_cxt *context,
+											 StringInfo buf, char *proname);
+static void mysql_deparse_func_expr_trim(FuncExpr *node, deparse_expr_cxt *context,
+										 StringInfo buf, char *proname, char *origin_function);
+static void mysql_deparse_func_expr_weight_string(FuncExpr *node, deparse_expr_cxt *context,
+												  StringInfo buf, char *proname);
+
+static void interval2unit(Datum datum, char **expr, char **unit);
 
 /*
  * Local variables.
  */
 static char *cur_opname = NULL;
+
+/*
+ * MysqlUniqueNumericFunction
+ * List of unique numeric functions for MySQL
+ */
+static const char *MysqlUniqueNumericFunction[] = {
+	"atan",
+	"conv",
+	"crc32",
+	"log2",
+	"match_against",
+	"mysql_pi",
+	"rand",
+	"truncate",
+NULL};
+
+/*
+ * MysqlUniqueJsonFunction
+ * List of unique json functions for MySQL
+ */
+static const char *MysqlUniqueJsonFunction[] = {
+	"json_array_append",
+	"json_array_insert",
+	"json_contains",
+	"json_contains_path",
+	"json_depth",
+	"json_extract",
+	"json_insert",
+	"json_keys",
+	"json_length",
+	"json_merge",
+	"json_merge_patch",
+	"json_merge_preserve",
+	"json_overlaps",
+	"json_pretty",
+	"json_quote",
+	"json_remove",
+	"json_replace",
+	"json_schema_valid",
+	"json_schema_validation_report",
+	"json_search",
+	"json_set",
+	"json_storage_free",
+	"json_storage_size",
+	"mysql_json_table",
+	"json_type",
+	"json_unquote",
+	"json_valid",
+	"json_value",
+	"member_of",
+NULL};
+
+/*
+ * MysqlUniqueStringFunction
+ * List of unique string function for MySQL
+ */
+static const char *MysqlUniqueStringFunction[] = {
+	"bin",
+	"mysql_char",
+	"elt",
+	"export_set",
+	"field",
+	"find_in_set",
+	"format",
+	"from_base64",
+	"hex",
+	"insert",
+	"instr",
+	"lcase",
+	"locate",
+	"make_set",
+	"mid",
+	"oct",
+	"ord",
+	"quote",
+	"regexp_instr",
+	"regexp_like",
+	"regexp_replace",
+	"regexp_substr",
+	"space",
+	"strcmp",
+	"substring_index",
+	"to_base64",
+	"ucase",
+	"unhex",
+	"weight_string",
+NULL};
+
+/*
+ * MysqlUniqueDateTimeFunction
+ * List of unique Date/Time function for MySQL
+ */
+static const char *MysqlUniqueDateTimeFunction[] = {
+	"adddate",
+	"addtime",
+	"convert_tz",
+	"curdate",
+	"mysql_current_date",
+	"curtime",
+	"mysql_current_time",
+	"mysql_current_timestamp",
+	"date_add",
+	"date_format",
+	"date_sub",
+	"datediff",
+	"day",
+	"dayname",
+	"dayofmonth",
+	"dayofweek",
+	"dayofyear",
+	"mysql_extract",
+	"from_days",
+	"from_unixtime",
+	"get_format",
+	"hour",
+	"last_day",
+	"mysql_localtime",
+	"mysql_localtimestamp",
+	"makedate",
+	"maketime",
+	"microsecond",
+	"minute",
+	"month",
+	"monthname",
+	"mysql_now",
+	"period_add",
+	"period_diff",
+	"quarter",
+	"sec_to_time",
+	"second",
+	"str_to_date",
+	"subdate",
+	"subtime",
+	"sysdate",
+	"mysql_time",
+	"time_format",
+	"time_to_sec",
+	"timediff",
+	"mysql_timestamp",
+	"timestampadd",
+	"timestampdiff",
+	"to_days",
+	"to_seconds",
+	"unix_timestamp",
+	"utc_date",
+	"utc_time",
+	"utc_timestamp",
+	"week",
+	"weekday",
+	"weekofyear",
+	"year",
+	"yearweek",
+NULL};
+
+/*
+ * MysqlSupportedBuiltinDateTimeFunction
+ * List of supported date time function for MySQL
+ */
+static const char *MysqlSupportedBuiltinDateTimeFunction[] = {
+	"date",
+NULL};
+
+/*
+ * MysqlSupportedBuiltinNumericFunction
+ * List of supported builtin numeric functions for MySQL
+ */
+static const char *MysqlSupportedBuiltinNumericFunction[] = {
+	"abs",
+	"acos",
+	"asin",
+	"atan",
+	"atan2",
+	"ceil",
+	"ceiling",
+	"cos",
+	"cot",
+	"degrees",
+	"div",
+	"exp",
+	"floor",
+	"ln",
+	"log",
+	"log10",
+	"mod",
+	"pow",
+	"power",
+	"radians",
+	"round",
+	"sign",
+	"sin",
+	"sqrt",
+	"tan",
+NULL};
+
+/*
+ * MysqlSupportedBuiltinJsonFunction
+ * List of supported builtin json functions for MySQL
+ */
+static const char *MysqlSupportedBuiltinJsonFunction[] = {
+	"json_build_array",
+	"json_build_object",
+NULL};
+
+/*
+ * MysqlSupportedBuiltinAggFunction
+ * List of supported builtin aggregate functions for MySQL
+ */
+static const char *MysqlSupportedBuiltinAggFunction[] = {
+	/* aggregate functions */
+	"sum",
+	"avg",
+	"max",
+	"min",
+	"bit_and",
+	"bit_or",
+	"stddev",
+	"stddev_pop",
+	"stddev_samp",
+	"var_pop",
+	"var_samp",
+	"variance",
+	"count",
+NULL};
+
+/*
+ * MysqlUniqueAggFunction
+ * List of unique aggregate function for MySQL
+ */
+static const char *MysqlUniqueAggFunction[] = {
+	"bit_xor",
+	"group_concat",
+	"json_arrayagg",
+	"json_objectagg",
+	"std",
+NULL};
+
+/*
+ * MysqlSupportedBuiltinStringFunction
+ * List of supported builtin string functions for MySQL
+ */
+static const char *MysqlSupportedBuiltinStringFunction[] = {
+	"ascii",
+	"bit_length",
+	"btrim",
+	"char_length",
+	"character_length",
+	"concat",
+	"concat_ws",
+	"left",
+	"length",
+	"lower",
+	"lpad",
+	"ltrim",
+	"octet_length",
+	"repeat",
+	"replace",
+	"reverse",
+	"right",
+	"rpad",
+	"rtrim",
+	"position",
+	"regexp_replace",
+	"substr",
+	"substring",
+	"trim",
+	"upper",
+NULL};
+
+/*
+ * MysqlUniqueCastFunction
+ * List of supported unique cast functions for MySQL
+ */
+static const char *MysqlUniqueCastFunction[] = {
+	"convert",
+NULL};
+
+/*
+ * CastFunction
+ * List of PostgreSQL cast functions, these functions can be skip cast.
+ */
+static const char *CastFunction[] = {
+	"float4",
+	"float8",
+	"int2",
+	"int4",
+	"int8",
+	"numeric",
+	"double precision",
+	/* string cast */
+	"bpchar",
+	"varchar",
+	/* date time cast */
+	"time",
+	"timetz",
+	"timestamp",
+	"timestamptz",
+	"interval",
+	/* json cast */
+	"json",
+	"jsonb",
+	/* binary cast */
+	"bytea",
+NULL};
+
+/*
+ * pull_func_clause_walker
+ *
+ * Recursively search for functions within a clause.
+ */
+static bool
+mysql_pull_func_clause_walker(Node *node, pull_func_clause_context * context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, FuncExpr))
+	{
+		context->funclist = lappend(context->funclist, node);
+		return false;
+	}
+
+	return expression_tree_walker(node, mysql_pull_func_clause_walker,
+								  (void *) context);
+}
+
+/*
+ * pull_func_clause
+ *
+ * Pull out function from a clause and then add to target list
+ */
+List *
+mysql_pull_func_clause(Node *node)
+{
+	pull_func_clause_context context;
+
+	context.funclist = NIL;
+
+	mysql_pull_func_clause_walker(node, &context);
+
+	return context.funclist;
+}
 
 /*
  * Append remote name of specified foreign table to buf.  Use value of
@@ -260,13 +650,24 @@ mysql_quote_identifier(const char *str, char quotechar)
  * of the columns being retrieved by RETURNING (if any), which is returned
  * to *retrieved_attrs.
  */
+#if (PG_VERSION_NUM >= 140000)
+/*
+ * This also stores end position of the VALUES clause, so that we can rebuild
+ * an INSERT for a batch of rows later.
+ */
 void
-mysql_deparse_insert(StringInfo buf, PlannerInfo *root, Index rtindex,
-					 Relation rel, List *targetAttrs)
+mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte, Index rtindex,
+					 Relation rel, List *targetAttrs, bool doNothing,
+					 int *values_end_len)
+#else
+void
+mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte, Index rtindex,
+					 Relation rel, List *targetAttrs, bool doNothing)
+#endif
 {
 	ListCell   *lc;
 
-	appendStringInfoString(buf, "INSERT INTO ");
+	appendStringInfo(buf, "INSERT %sINTO ", doNothing ? "IGNORE " : "");
 	mysql_deparse_relation(buf, rel);
 
 	if (targetAttrs)
@@ -285,7 +686,7 @@ mysql_deparse_insert(StringInfo buf, PlannerInfo *root, Index rtindex,
 				appendStringInfoString(buf, ", ");
 			first = false;
 
-			mysql_deparse_column_ref(buf, rtindex, attnum, planner_rt_fetch(rtindex, root), false);
+			mysql_deparse_column_ref(buf, rtindex, attnum, rte, false);
 		}
 
 		appendStringInfoString(buf, ") VALUES (");
@@ -306,7 +707,61 @@ mysql_deparse_insert(StringInfo buf, PlannerInfo *root, Index rtindex,
 	}
 	else
 		appendStringInfoString(buf, " DEFAULT VALUES");
+#if (PG_VERSION_NUM >= 140000)
+	*values_end_len = buf->len;
+#endif
 }
+
+#if (PG_VERSION_NUM >= 140000)
+/*
+ * rebuild remote INSERT statement
+ *
+ * Provided a number of rows in a batch, builds INSERT statement with the
+ * right number of parameters.
+ */
+void
+mysql_rebuild_insert_sql(StringInfo buf, char *orig_query,
+						 int values_end_len, int num_cols,
+						 int num_rows)
+{
+	int			i,
+				j;
+	int			pindex;
+	bool		first;
+
+	/* Make sure the values_end_len is sensible */
+	Assert((values_end_len > 0) && (values_end_len <= strlen(orig_query)));
+
+	/* Copy up to the end of the first record from the original query */
+	appendBinaryStringInfo(buf, orig_query, values_end_len);
+
+	/*
+	 * Add records to VALUES clause (we already have parameters for the first
+	 * row, so start at the right offset).
+	 */
+	pindex = num_cols + 1;
+	for (i = 0; i < num_rows; i++)
+	{
+		appendStringInfoString(buf, ", (");
+
+		first = true;
+		for (j = 0; j < num_cols; j++)
+		{
+			if (!first)
+				appendStringInfoString(buf, ", ");
+			first = false;
+
+			appendStringInfo(buf, "?");
+			pindex++;
+		}
+
+		appendStringInfoChar(buf, ')');
+	}
+
+	/* Copy stuff after VALUES clause from the original query */
+	appendStringInfoString(buf, orig_query + values_end_len);
+}
+#endif
 
 void
 mysql_deparse_analyze(StringInfo sql, char *dbname, char *relname)
@@ -328,15 +783,39 @@ mysql_deparse_analyze(StringInfo sql, char *dbname, char *relname)
  *
  * If qualify_col is true, add relation alias before the column name.
  */
+
+#if (PG_VERSION_NUM >= 140000)
+/*
+ * Construct a simple "TRUNCATE rel" statement
+ */
+void
+mysql_deparse_truncate_sql(StringInfo buf,
+						   List *rels)
+{
+	ListCell   *cell;
+
+	appendStringInfoString(buf, "TRUNCATE ");
+
+	foreach(cell, rels)
+	{
+		Relation	rel = lfirst(cell);
+
+		if (cell != list_head(rels))
+			appendStringInfoString(buf, ", ");
+
+		mysql_deparse_relation(buf, rel);
+	}
+}
+#endif
+
 static void
 mysql_deparse_target_list(StringInfo buf,
-						RangeTblEntry *rte,
-						Index rtindex,
-						Relation rel,
-						Bitmapset *attrs_used,
-						bool qualify_col,
-						List **retrieved_attrs,
-						bool is_concat)
+						  RangeTblEntry *rte,
+						  Index rtindex,
+						  Relation rel,
+						  Bitmapset *attrs_used,
+						  bool qualify_col,
+						  List **retrieved_attrs)
 {
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	bool		have_wholerow;
@@ -365,39 +844,13 @@ mysql_deparse_target_list(StringInfo buf,
 			if (!first)
 				appendStringInfoString(buf, ", ");
 
-			if (is_concat)
-				appendStringInfoString(buf, "IFNULL( ");
-
 			first = false;
 
 			mysql_deparse_column_ref(buf, rtindex, i, rte, qualify_col);
 
-			if (is_concat)
-				appendStringInfoString(buf, " , '') ");
-
 			*retrieved_attrs = lappend_int(*retrieved_attrs, i);
 		}
 	}
-
-	/*
-	 * Add ctid if needed.  We currently don't support retrieving any other
-	 * system columns.
-	 */
-	if (bms_is_member(SelfItemPointerAttributeNumber - FirstLowInvalidHeapAttributeNumber,
-					  attrs_used))
-	{
-		if (!first)
-			appendStringInfoString(buf, ", ");
-		first = false;
-
-		if (qualify_col)
-			ADD_REL_QUALIFIER(buf, rtindex);
-		appendStringInfoString(buf, "ctid");
-
-		*retrieved_attrs = lappend_int(*retrieved_attrs,
-									   SelfItemPointerAttributeNumber);
-	}
-
 	/* Don't generate bad syntax if no undropped columns */
 	if (first)
 		appendStringInfoString(buf, "NULL");
@@ -436,7 +889,11 @@ mysql_deparse_locking_clause(deparse_expr_cxt *context)
 		 * that DECLARE CURSOR ... FOR UPDATE is supported, which it isn't
 		 * before 8.3.
 		 */
+#if (PG_VERSION_NUM >= 140000)
+		if (bms_is_member(relid, root->all_result_relids) &&
+#else
 		if (relid == root->parse->resultRelation &&
+#endif
 			(root->parse->commandType == CMD_UPDATE ||
 			 root->parse->commandType == CMD_DELETE))
 		{
@@ -520,6 +977,10 @@ mysql_append_where_clause(StringInfo buf, PlannerInfo *root,
 	context.params_list = params;
 	context.can_skip_cast = false;
 	context.can_convert_time = false;
+	context.can_convert_unit_arg = false;
+	context.is_not_add_array = false;
+	context.json_table_expr = NULL;
+	context.can_skip_convert_unit_arg = false;
 
 	foreach(lc, exprs)
 	{
@@ -550,7 +1011,45 @@ mysql_deparse_column_ref(StringInfo buf, int varno, int varattno,
 	/* varno must not be any of OUTER_VAR, INNER_VAR and INDEX_VAR. */
 	Assert(!IS_SPECIAL_VARNO(varno));
 
-	if (varattno == 0)
+	/* We not support fetching any system attributes from remote side */
+	if (varattno < 0)
+	{
+		/*
+		 * All other system attributes are fetched as 0, except for table OID
+		 * and ctid, table OID is fetched as the local table OID, ctid is
+		 * fectch as invalid value. However, we must be careful; the table
+		 * could be beneath an outer join, in which case it must go to NULL
+		 * whenever the rest of the row does.
+		 */
+		char		fetchval[32];
+
+		if (varattno == TableOidAttributeNumber)
+		{
+			/*
+			 * table OID is fetched as the local table OID
+			 */
+			pg_snprintf(fetchval, sizeof(fetchval), "%u", rte->relid);
+		}
+		else if (varattno == SelfItemPointerAttributeNumber)
+		{
+			/*
+			 * ctid is fetched as '(4294967295,0)' ~ (0xFFFFFFFF, 0) (invalid
+			 * value), which is default value of tupleSlot->tts_tid after run
+			 * ExecClearTuple.
+			 */
+			pg_snprintf(fetchval, sizeof(fetchval), "'(%u,%u)'",
+						InvalidBlockNumber,
+						InvalidOffsetNumber);
+		}
+		else
+		{
+			/* other system attributes are fetched as 0 */
+			pg_snprintf(fetchval, sizeof(fetchval), "%u", 0);
+		}
+
+		appendStringInfo(buf, "%s", fetchval);
+	}
+	else if (varattno == 0)
 	{
 		/* Whole row reference */
 		Relation	rel;
@@ -582,10 +1081,9 @@ mysql_deparse_column_ref(StringInfo buf, int varno, int varattno,
 		 * query would always involve multiple relations, thus qualify_col
 		 * would be true.
 		 */
-		appendStringInfoString(buf, "CONCAT( '(', CONCAT_WS(',' , ");
+
 		mysql_deparse_target_list(buf, rte, varno, rel, attrs_used, qualify_col,
-												  &retrieved_attrs, true);
-		appendStringInfoString(buf, " ) , ')' )");
+								  &retrieved_attrs);
 
 		table_close(rel, NoLock);
 		bms_free(attrs_used);
@@ -616,14 +1114,14 @@ mysql_deparse_column_ref(StringInfo buf, int varno, int varattno,
 		}
 
 		/*
-		* If it's a column of a regular table or it doesn't have column_name FDW
-		* option, use attribute name.
-		*/
+		 * If it's a column of a regular table or it doesn't have column_name
+		 * FDW option, use attribute name.
+		 */
 		if (colname == NULL)
 #if PG_VERSION_NUM >= 110000
-		colname = get_attname(rte->relid, varattno, false);
+			colname = get_attname(rte->relid, varattno, false);
 #else
-		colname = get_relid_attribute_name(rte->relid, varattno);
+			colname = get_relid_attribute_name(rte->relid, varattno);
 #endif
 		if (qualify_col)
 			ADD_REL_QUALIFIER(buf, varno);
@@ -632,42 +1130,9 @@ mysql_deparse_column_ref(StringInfo buf, int varno, int varattno,
 	}
 }
 
-static void
-mysql_deparse_string(StringInfo buf, const char *val, bool isstr)
-{
-	const char *valptr;
-	int			i = 0;
-
-	if (isstr)
-		appendStringInfoChar(buf, '\'');
-
-	for (valptr = val; *valptr; valptr++,i++)
-	{
-		char		ch = *valptr;
-
-		/*
-		 * Remove '{', '}', and \" character from the string. Because this
-		 * syntax is not recognize by the remote MySQL server.
-		 */
-		if ((ch == '{' && i == 0) || (ch == '}' && (i == (strlen(val) - 1))) ||
-			ch == '\"')
-			continue;
-
-		if (isstr && ch == ',')
-		{
-			appendStringInfoString(buf, "', '");
-			continue;
-		}
-		appendStringInfoChar(buf, ch);
-	}
-
-	if (isstr)
-		appendStringInfoChar(buf, '\'');
-}
-
 /*
-* Append a SQL string literal representing "val" to buf.
-*/
+ * Append a SQL string literal representing "val" to buf.
+ */
 static void
 mysql_deparse_string_literal(StringInfo buf, const char *val)
 {
@@ -688,6 +1153,55 @@ mysql_deparse_string_literal(StringInfo buf, const char *val)
 }
 
 /*
+ * Append a SQL const array to buf.
+ * Support for text, json and path_value
+ */
+static void
+mysql_deparse_const_array(Const *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	char	   *extval;
+	int			num_elems = 0;
+	Datum	   *elem_values;
+	bool	   *elem_nulls;
+	Oid			elmtype;
+	int			i;
+	Oid			outputFunctionId;
+	bool		typeVarLength;
+	char	   *type_name = mysql_deparse_type_name(node->consttype, node->consttypmod);
+
+	mysql_deconstruct_constant_array(node, &elem_nulls, &elem_values, &elmtype, &num_elems);
+	getTypeOutputInfo(elmtype, &outputFunctionId, &typeVarLength);
+
+	for (i = 0; i < num_elems; i++)
+	{
+		Assert(!elem_nulls[i]);
+
+		if (i > 0)
+			appendStringInfoString(buf, ", ");
+
+		/* Just add value for path_value[] type */
+		if (strstr(type_name, "json[]") != NULL)
+			/* Mysql not cast text to json automatically */
+			appendStringInfoString(buf, "CAST(\'");
+		else if (strstr(type_name, "text[]") != NULL)
+			/* Add single quote for text value */
+			appendStringInfoChar(buf, '\'');
+
+		extval = OidOutputFunctionCall(outputFunctionId, elem_values[i]);
+		appendStringInfo(buf, "%s", extval);
+
+		if (strstr(type_name, "json[]") != NULL)
+			appendStringInfoString(buf, "\' AS JSON)");
+		else if (strstr(type_name, "text[]") != NULL)
+			appendStringInfoChar(buf, '\'');
+	}
+
+	pfree(elem_values);
+	pfree(elem_nulls);
+}
+
+/*
  * Deparse given expression into context->buf.
  *
  * This function must support all the same node types that foreign_expr_walker
@@ -700,7 +1214,8 @@ mysql_deparse_string_literal(StringInfo buf, const char *val)
 static void
 deparseExpr(Expr *node, deparse_expr_cxt *context)
 {
-	bool outer_can_skip_cast = context->can_skip_cast;
+	bool		outer_can_skip_cast = context->can_skip_cast;
+	bool		outer_is_not_distinct_op = context->is_not_distinct_op;
 
 	if (node == NULL)
 		return;
@@ -723,7 +1238,7 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 			mysql_deparse_array_ref((ArrayRef *) node, context);
 #else
 		case T_SubscriptingRef:
-			mysql_deparse_array_ref((SubscriptingRef *) node, context);
+			mysql_deparse_subscripting_ref((SubscriptingRef *) node, context);
 #endif
 			break;
 		case T_FuncExpr:
@@ -735,6 +1250,7 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 			mysql_deparse_op_expr((OpExpr *) node, context);
 			break;
 		case T_DistinctExpr:
+			context->is_not_distinct_op = outer_is_not_distinct_op;
 			mysql_deparse_distinct_expr((DistinctExpr *) node, context);
 			break;
 		case T_ScalarArrayOpExpr:
@@ -755,6 +1271,13 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 			break;
 		case T_ArrayExpr:
 			mysql_deparse_array_expr((ArrayExpr *) node, context);
+			break;
+		case T_RowExpr:
+			mysql_deparse_row_expr((RowExpr *) node, context);
+			break;
+		case T_CoerceViaIO:
+			/* skip outer cast */
+			deparseExpr(((CoerceViaIO *) node)->arg, context);
 			break;
 		default:
 			elog(ERROR, "unsupported expression type for deparse: %d",
@@ -783,8 +1306,12 @@ mysql_deparse_from_expr(List *quals, deparse_expr_cxt *context)
 	/* Construct FROM clause */
 	appendStringInfoString(buf, " FROM ");
 	mysql_deparse_from_expr_for_rel(buf, context->root, scanrel,
-						  (bms_membership(scanrel->relids) == BMS_MULTIPLE),
-						  (Index) 0, NULL, context->params_list);
+									(bms_membership(scanrel->relids) == BMS_MULTIPLE),
+									(Index) 0, NULL, context->params_list);
+
+	/* construct JSON_TABLE if needed */
+	if (context->json_table_expr != NULL && IS_SIMPLE_REL(scanrel))
+		mysql_append_json_table_func(context->json_table_expr, context);
 
 	/* Construct WHERE clause */
 	if (quals != NIL)
@@ -904,18 +1431,23 @@ mysql_deparse_update(StringInfo buf, PlannerInfo *root, Index rtindex,
  */
 void
 mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
-									Index rtindex, Relation rel,
-									RelOptInfo *foreignrel,
-									List *targetlist,
-									List *targetAttrs,
-									List *remote_conds,
-									List **params_list,
-									List **retrieved_attrs)
+								Index rtindex, Relation rel,
+								RelOptInfo *foreignrel,
+								List *targetlist,
+								List *targetAttrs,
+								List *remote_conds,
+								List **params_list,
+								List **retrieved_attrs)
 {
 	deparse_expr_cxt context;
 	int			nestlevel;
 	bool		first;
+#if (PG_VERSION_NUM >= 140000)
+	ListCell   *lc,
+			   *lc2;
+#else
 	ListCell   *lc;
+#endif
 
 	/* Set up context struct for recursion */
 	context.root = root;
@@ -924,10 +1456,13 @@ mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
 	context.buf = buf;
 	context.params_list = params_list;
 	context.can_convert_time = false;
+	context.is_not_distinct_op = false;
+	context.can_skip_cast = false;
+	context.is_not_add_array = false;
+	context.json_table_expr = NULL;
 
 	/*
-	 * MySQL does not support UPDATE...FROM,
-	 * must to deparse UPDATE...JOIN.
+	 * MySQL does not support UPDATE...FROM, must to deparse UPDATE...JOIN.
 	 */
 	appendStringInfoString(buf, "UPDATE ");
 	if (IS_JOIN_REL(foreignrel))
@@ -940,7 +1475,7 @@ mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
 		appendStringInfo(buf, " %s JOIN ", mysql_get_jointype_name(fpinfo->jointype));
 
 		mysql_deparse_from_expr_for_rel(buf, root, foreignrel, true, rtindex,
-											&ignore_conds, params_list);
+										&ignore_conds, params_list);
 		remote_conds = list_concat(remote_conds, ignore_conds);
 	}
 	else
@@ -952,6 +1487,15 @@ mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
 	nestlevel = mysql_set_transmission_modes();
 
 	first = true;
+#if (PG_VERSION_NUM >= 140000)
+	forboth(lc, targetlist, lc2, targetAttrs)
+	{
+		TargetEntry *tle = lfirst_node(TargetEntry, lc);
+		int			attnum = lfirst_int(lc2);
+
+		/* update's new-value expressions shouldn't be resjunk */
+		Assert(!tle->resjunk);
+#else
 	foreach(lc, targetAttrs)
 	{
 		int			attnum = lfirst_int(lc);
@@ -960,6 +1504,7 @@ mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
 		if (!tle)
 			elog(ERROR, "attribute number %d not found in UPDATE targetlist",
 				 attnum);
+#endif
 
 		if (!first)
 			appendStringInfoString(buf, ", ");
@@ -1012,11 +1557,11 @@ mysql_deparse_delete(StringInfo buf, PlannerInfo *root, Index rtindex,
  */
 void
 mysql_deparse_direct_delete_sql(StringInfo buf, PlannerInfo *root,
-									Index rtindex, Relation rel,
-									RelOptInfo *foreignrel,
-									List *remote_conds,
-									List **params_list,
-									List **retrieved_attrs)
+								Index rtindex, Relation rel,
+								RelOptInfo *foreignrel,
+								List *remote_conds,
+								List **params_list,
+								List **retrieved_attrs)
 {
 	deparse_expr_cxt context;
 
@@ -1027,6 +1572,10 @@ mysql_deparse_direct_delete_sql(StringInfo buf, PlannerInfo *root,
 	context.buf = buf;
 	context.params_list = params_list;
 	context.can_convert_time = false;
+	context.is_not_distinct_op = false;
+	context.can_skip_cast = false;
+	context.is_not_add_array = false;
+	context.json_table_expr = NULL;
 
 	appendStringInfoString(buf, "DELETE FROM ");
 
@@ -1038,16 +1587,16 @@ mysql_deparse_direct_delete_sql(StringInfo buf, PlannerInfo *root,
 		appendStringInfo(buf, " %s%d", REL_ALIAS_PREFIX, rtindex);
 		appendStringInfo(buf, " USING ");
 
-		/* 
-		 * MySQL does not allow to define alias in FROM clause,
-		 * alias must be defined in USING clause.
+		/*
+		 * MySQL does not allow to define alias in FROM clause, alias must be
+		 * defined in USING clause.
 		 */
 		mysql_deparse_relation(buf, rel);
 		appendStringInfo(buf, " %s%d", REL_ALIAS_PREFIX, rtindex);
 		appendStringInfo(buf, " %s JOIN ", mysql_get_jointype_name(fpinfo->jointype));
 
 		mysql_deparse_from_expr_for_rel(buf, root, foreignrel, true, rtindex,
-											&ignore_conds, params_list);
+										&ignore_conds, params_list);
 		remote_conds = list_concat(remote_conds, ignore_conds);
 	}
 	else
@@ -1074,7 +1623,7 @@ mysql_deparse_var(Var *node, deparse_expr_cxt *context)
 	StringInfo	buf = context->buf;
 	Relids		relids = context->scanrel->relids;
 	int			relno;
-	int			colno;	
+	int			colno;
 
 	/* Qualify columns when multiple relations are involved. */
 	bool		qualify_col = (bms_membership(relids) == BMS_MULTIPLE);
@@ -1202,17 +1751,41 @@ mysql_deparse_const(Const *node, deparse_expr_cxt *context)
 		case INTERVALOID:
 			if (context->can_convert_time)
 			{
-				uint64 sec = 0;
-				int32 msec = 0;
+				char	   *expr;
+				char	   *unit = "SECOND_MICROSECOND";
 
-				/* convert interval to second */
-				interval2sec(node->constvalue, &sec, &msec);
-				appendStringInfo(buf, "%lu.%d", sec, msec);
+				/* convert interval to second_microsecond */
+				interval2unit(node->constvalue, &expr, &unit);
+				appendStringInfo(buf, "%s", expr);
+				break;
 			}
-			else
-				deparse_interval(buf, node->constvalue);
+
+			if (context->can_convert_unit_arg)
+			{
+				char	   *expr;
+				char	   *unit = NULL;
+
+				/* convert interval to time unit of Mysql */
+				interval2unit(node->constvalue, &expr, &unit);
+				appendStringInfo(buf, "INTERVAL \'%s\' %s", expr, unit);
+				break;
+			}
+
+			if (context->can_skip_convert_unit_arg)
+			{
+				char	   *expr;
+				char	   *unit = NULL;
+
+				/* convert interval to time unit of Mysql */
+				interval2unit(node->constvalue, &expr, &unit);
+				appendStringInfo(buf, "\'%s\'", expr);
+				break;
+			}
+
+			deparse_interval(buf, node->constvalue);
 			break;
 		case BYTEAOID:
+
 			/*
 			 * The string for BYTEA always seems to be in the format "\\x##"
 			 * where # is a hex digit, Even if the value passed in is
@@ -1223,9 +1796,26 @@ mysql_deparse_const(Const *node, deparse_expr_cxt *context)
 			extval = OidOutputFunctionCall(typoutput, node->constvalue);
 			appendStringInfo(buf, "X\'%s\'", extval + 2);
 			break;
-		default:
+		case TEXTARRAYOID:
+			mysql_deparse_const_array(node, context);
+			break;
+		case JSONARRAYOID:
+			mysql_deparse_const_array(node, context);
+			break;
+		case JSONOID:
 			extval = OidOutputFunctionCall(typoutput, node->constvalue);
+			appendStringInfoString(buf, "CAST(");
 			mysql_deparse_string_literal(buf, extval);
+			appendStringInfoString(buf, " AS JSON)");
+			break;
+		default:
+			if (strcmp(mysql_deparse_type_name(node->consttype, node->consttypmod), "public.path_value[]") == 0)
+				mysql_deparse_const_array(node, context);
+			else
+			{
+				extval = OidOutputFunctionCall(typoutput, node->constvalue);
+				mysql_deparse_string_literal(buf, extval);
+			}
 			break;
 	}
 }
@@ -1273,66 +1863,766 @@ mysql_deparse_param(Param *node, deparse_expr_cxt *context)
  */
 static void
 #if PG_VERSION_NUM < 120000
-mysql_deparse_array_ref(ArrayRef *node, deparse_expr_cxt *context)
+mysql_deparse_array_ref(ArrayRef * node, deparse_expr_cxt *context)
 #else
-mysql_deparse_array_ref(SubscriptingRef *node, deparse_expr_cxt *context)
+mysql_deparse_subscripting_ref(SubscriptingRef *node, deparse_expr_cxt *context)
 #endif
 {
-	StringInfo	buf = context->buf;
-	ListCell   *lowlist_item;
 	ListCell   *uplist_item;
+	ListCell   *lc;
+	StringInfo	buf = context->buf;
+	bool		first = true;
+	ArrayExpr  *array_expr = (ArrayExpr *) node->refexpr;
 
-	/* Always parenthesize the expression. */
-	appendStringInfoChar(buf, '(');
+	/* Not support slice function, which is excluded in pushdown checking */
+	Assert(node->reflowerindexpr == NULL);
+	Assert(node->refupperindexpr != NULL);
 
-	/*
-	 * Deparse referenced array expression first.  If that expression includes
-	 * a cast, we have to parenthesize to prevent the array subscript from
-	 * being taken as typename decoration.  We can avoid that in the typical
-	 * case of subscripting a Var, but otherwise do it.
-	 */
-	if (IsA(node->refexpr, Var))
-		deparseExpr(node->refexpr, context);
-	else
+	/* Transform array subscripting to ELT(index number, str1, str2, ...) */
+	appendStringInfoString(buf, "ELT(");
+
+	/* Append index number of ELT() expression */
+	uplist_item = list_head(node->refupperindexpr);
+	deparseExpr(lfirst(uplist_item), context);
+	appendStringInfoString(buf, ", ");
+
+	/* Deparse Array Expression in form of ELT syntax */
+	foreach(lc, array_expr->elements)
 	{
-		appendStringInfoChar(buf, '(');
-		deparseExpr(node->refexpr, context);
+		if (!first)
+			appendStringInfoString(buf, ", ");
+		deparseExpr(lfirst(lc), context);
+		first = false;
+	}
+
+	/* Enclose the ELT() expression */
+	appendStringInfoChar(buf, ')');
+
+}
+
+/*
+ * This is possible that the name of function in PostgreSQL and mysql differ,
+ * so return the mysql equivalent function name.
+ */
+static char *
+mysql_replace_function(char *in, List *args)
+{
+	bool		has_mysql_prefix = false;
+
+	if (strcmp(in, "btrim") == 0 ||
+		strcmp(in, "ltrim") == 0 ||
+		strcmp(in, "rtrim") == 0)
+		return "trim";
+	if (strcmp(in, "log") == 0 && list_length(args) == 1)
+		return "log10";
+
+	has_mysql_prefix = starts_with("mysql_", in);
+
+	if (strcmp(in, "json_agg") == 0)
+		return "json_arrayagg";
+	if (strcmp(in, "json_object_agg") == 0)
+		return "json_objectagg";
+	if (strcmp(in, "json_build_array") == 0)
+		return "json_array";
+	if (strcmp(in, "json_build_object") == 0)
+		return "json_object";
+
+	if (has_mysql_prefix == true &&
+		(strcmp(in, "mysql_pi") == 0 ||
+		 strcmp(in, "mysql_char") == 0 ||
+		 strcmp(in, "mysql_current_date") == 0 ||
+		 strcmp(in, "mysql_current_time") == 0 ||
+		 strcmp(in, "mysql_current_timestamp") == 0 ||
+		 strcmp(in, "mysql_extract") == 0 ||
+		 strcmp(in, "mysql_localtime") == 0 ||
+		 strcmp(in, "mysql_localtimestamp") == 0 ||
+		 strcmp(in, "mysql_now") == 0 ||
+		 strcmp(in, "mysql_time") == 0 ||
+		 strcmp(in, "mysql_timestamp") == 0 ||
+		 strcmp(in, "mysql_json_table") == 0))
+	{
+		in += strlen("mysql_");
+	}
+
+	return in;
+}
+
+/*
+ * Deparse function match_against()
+ */
+static void
+mysql_deparse_func_expr_match_against(FuncExpr *node, deparse_expr_cxt *context, StringInfo buf, char *proname)
+{
+	ListCell   *arg;
+	bool		first;
+
+	/* get all the arguments */
+	first = true;
+	foreach(arg, node->args)
+	{
+		Expr	   *node;
+		ListCell   *lc;
+		ArrayExpr  *anode;
+		bool		swt_arg;
+
+		node = lfirst(arg);
+		if (IsA(node, ArrayCoerceExpr))
+		{
+			node = (Expr *) ((ArrayCoerceExpr *) node)->arg;
+		}
+
+		Assert(nodeTag(node) == T_ArrayExpr);
+		anode = (ArrayExpr *) node;
+		appendStringInfoString(buf, "MATCH (");
+		swt_arg = true;
+		foreach(lc, anode->elements)
+		{
+			Expr	   *node;
+
+			node = lfirst(lc);
+			if (nodeTag(node) == T_Var)
+			{
+				if (!first)
+					appendStringInfoString(buf, ", ");
+				mysql_deparse_var((Var *) node, context);
+			}
+			else if (nodeTag(node) == T_Const)
+			{
+				Const	   *cnode = (Const *) node;
+
+				if (swt_arg == true)
+				{
+					appendStringInfoString(buf, ") AGAINST ( ");
+					swt_arg = false;
+					first = true;
+					mysql_deparse_const(cnode, context);
+					appendStringInfoString(buf, " ");
+				}
+				else
+				{
+					Oid			typoutput;
+					const char *valptr;
+					char	   *extval;
+					bool		typIsVarlena;
+
+					getTypeOutputInfo(cnode->consttype,
+									  &typoutput, &typIsVarlena);
+
+					extval = OidOutputFunctionCall(typoutput, cnode->constvalue);
+					for (valptr = extval; *valptr; valptr++)
+					{
+						char		ch = *valptr;
+
+						if (SQL_STR_DOUBLE(ch, true))
+							appendStringInfoChar(buf, ch);
+						appendStringInfoChar(buf, ch);
+					}
+				}
+			}
+			first = false;
+		}
 		appendStringInfoChar(buf, ')');
 	}
+}
 
-	/* Deparse subscript expressions. */
-	lowlist_item = list_head(node->reflowerindexpr);	/* could be NULL */
-	foreach(uplist_item, node->refupperindexpr)
-	{
-		appendStringInfoChar(buf, '[');
-		if (lowlist_item)
-		{
-			deparseExpr(lfirst(lowlist_item), context);
-			appendStringInfoChar(buf, ':');
-#if PG_VERSION_NUM < 130000
-			lowlist_item = lnext(lowlist_item);
-#else
-			lowlist_item = lnext(node->reflowerindexpr, lowlist_item);
-#endif
-		}
-		deparseExpr(lfirst(uplist_item), context);
-		appendStringInfoChar(buf, ']');
-	}
+/*
+ * Deparse function position()
+ */
+static void
+mysql_deparse_func_expr_position(FuncExpr *node, deparse_expr_cxt *context, StringInfo buf, char *proname)
+{
+	Expr	   *arg1;
+	Expr	   *arg2;
+
+	/* Append the function name */
+	appendStringInfo(buf, "%s(", proname);
+
+	/*
+	 * POSITION function has only two arguments. When deparsing, the range of
+	 * these argument will be changed, the first argument will be in last so
+	 * it will be get first, After that, the last argument will be get later.
+	 */
+	Assert(list_length(node->args) == 2);
+
+	/* Get the first argument */
+	arg1 = lsecond(node->args);
+	deparseExpr(arg1, context);
+	appendStringInfo(buf, " IN ");
+	/* Get the last argument */
+	arg2 = linitial(node->args);
+	deparseExpr(arg2, context);
 
 	appendStringInfoChar(buf, ')');
 }
 
 /*
- * This is possible that the name of function in PostgreSQL and mysql differ,
- * so return the mysql eloquent function name.
+ * Deparse function trim()
  */
-static char *
-mysql_replace_function(char *in)
+static void
+mysql_deparse_func_expr_trim(FuncExpr *node, deparse_expr_cxt *context, StringInfo buf, char *proname, char *origin_function)
 {
-	if (strcmp(in, "btrim") == 0)
-		return "trim";
+	Expr	   *arg1;
+	Expr	   *arg2;
 
-	return in;
+	/*
+	 * If rtrim, ltrim function has 1 argument, we still keep the function
+	 * name.
+	 */
+	if (list_length(node->args) == 1)
+	{
+		if (strcmp(origin_function, "ltrim") == 0 ||
+			strcmp(origin_function, "rtrim") == 0)
+			/* Append the function name */
+			appendStringInfo(buf, "%s(", origin_function);
+		else
+			/* Append the function name */
+			appendStringInfo(buf, "%s(", proname);
+		arg1 = linitial(node->args);
+		deparseExpr(arg1, context);
+	}
+
+	/*
+	 * With rtrim, ltrim, btrim function. If they have 2 arguments, we will
+	 * replace into trim. And we base on the origin_function which is the name
+	 * before replace to determine to add TRAILING|LEADING|BOTH.
+	 */
+	else
+	{
+		/* Append the function name */
+		appendStringInfo(buf, "%s(", proname);
+
+		if (strcmp(origin_function, "rtrim") == 0)
+			appendStringInfo(buf, "TRAILING ");
+		if (strcmp(origin_function, "ltrim") == 0)
+			appendStringInfo(buf, "LEADING ");
+		if (strcmp(origin_function, "btrim") == 0)
+			appendStringInfo(buf, "BOTH ");
+
+		/* Get the first argument */
+		arg1 = lsecond(node->args);
+		deparseExpr(arg1, context);
+		appendStringInfo(buf, " FROM ");
+		/* Get the last argument */
+		arg2 = linitial(node->args);
+		deparseExpr(arg2, context);
+	}
+	appendStringInfoChar(buf, ')');
+}
+
+/*
+ * Deparse function weight_string()
+ */
+static void
+mysql_deparse_func_expr_weight_string(FuncExpr *node, deparse_expr_cxt *context, StringInfo buf, char *proname)
+{
+	bool		first;
+	ListCell   *arg;
+
+	/* Append the function name ... */
+	appendStringInfo(buf, "%s(", proname);
+
+	/* ... and all the arguments */
+	first = true;
+	bool		check_arg_const = true;
+
+	foreach(arg, node->args)
+	{
+		Expr	   *nodeExpr;
+
+		nodeExpr = lfirst(arg);
+		if (nodeTag(nodeExpr) == T_Var)
+		{
+			if (!first)
+				appendStringInfoString(buf, ", ");
+			mysql_deparse_var((Var *) nodeExpr, context);
+		}
+		else if (nodeTag(nodeExpr) == T_Const)
+		{
+			Const	   *cnode = (Const *) nodeExpr;
+
+			if (check_arg_const && node->args->length > 2)
+			{
+				Oid			typoutput;
+				const char *valptr;
+				char	   *extval;
+				bool		typIsVarlena;
+
+				getTypeOutputInfo(cnode->consttype,
+								  &typoutput, &typIsVarlena);
+
+				extval = OidOutputFunctionCall(typoutput, cnode->constvalue);
+				appendStringInfoString(buf, " AS ");
+				for (valptr = extval; *valptr; valptr++)
+				{
+					char		ch = *valptr;
+
+					if (SQL_STR_DOUBLE(ch, true))
+						appendStringInfoChar(buf, ch);
+					appendStringInfoChar(buf, ch);
+				}
+				check_arg_const = false;
+			}
+
+			/* deparse query when input is NULL */
+			else if (check_arg_const && node->args->length == 1)
+			{
+				Oid			typoutput;
+				const char *valptr;
+				char	   *extval;
+				bool		typIsVarlena;
+
+				getTypeOutputInfo(cnode->consttype,
+								  &typoutput, &typIsVarlena);
+
+				extval = OidOutputFunctionCall(typoutput, cnode->constvalue);
+				for (valptr = extval; *valptr; valptr++)
+				{
+					char		ch = *valptr;
+
+					if (SQL_STR_DOUBLE(ch, true))
+						appendStringInfoChar(buf, ch);
+					appendStringInfoChar(buf, ch);
+				}
+				check_arg_const = false;
+			}
+			else
+			{
+				appendStringInfoChar(buf, '(');
+				mysql_deparse_const(cnode, context);
+				appendStringInfoChar(buf, ')');
+			}
+		}
+		first = false;
+	}
+	appendStringInfoChar(buf, ')');
+}
+
+
+/*
+ * Deparse target for query has json_table function
+ */
+static void
+mysql_deparse_target_json_table_func(FuncExpr *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	Expr	   *arg = llast(node->args);
+	Const	   *cnode;
+	char	   *extval;
+	int			num_elems = 0;
+	Datum	   *elem_values;
+	bool	   *elem_nulls;
+	Oid			elmtype;
+	int			i;
+	Oid			outputFunctionId;
+	bool		typeVarLength;
+
+	if (!IsA(arg, Const))
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_INVALID_ATTRIBUTE_VALUE),
+				 errmsg("Wrong input type for last argument of JSON_TABLE"),
+				 errhint("Use string literal to describle column list.")));
+
+	if (context->json_table_expr != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FDW_INVALID_ATTRIBUTE_VALUE),
+				 errmsg("Only one JSON_TABLE function is allowed in SELECT clause."),
+				 errhint("Use string literal to describle column list.")));
+
+	cnode = (Const *) arg;
+
+	mysql_deconstruct_constant_array(cnode, &elem_nulls, &elem_values, &elmtype, &num_elems);
+	getTypeOutputInfo(elmtype, &outputFunctionId, &typeVarLength);
+
+	appendStringInfoString(buf, " CONCAT('(', CONCAT_WS(',', ");
+	for (i = 0; i < num_elems; i++)
+	{
+		Assert(!elem_nulls[i]);
+		if (i > 0)
+			appendStringInfoString(buf, ", ");
+		extval = OidOutputFunctionCall(outputFunctionId, elem_values[i]);
+		appendStringInfo(buf, " IF(ISNULL(%s%d.%s), '',", REL_ALIAS_PREFIX, context->foreignrel->relid + 1, extval);
+		appendStringInfo(buf, " JSON_QUOTE(CONCAT(%s%d.%s)))", REL_ALIAS_PREFIX, context->foreignrel->relid + 1, extval);
+	}
+
+	appendStringInfoString(buf, "), ')')");
+	/* Save json_table node for deparse from */
+	context->json_table_expr = node;
+	pfree(elem_values);
+	pfree(elem_nulls);
+}
+
+/*
+ * append json_value function to buf
+ */
+static void
+mysql_append_json_value_func(FuncExpr *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	ListCell   *arg;
+	int			arg_num = 1;
+
+	context->can_skip_cast = true;
+
+	/* Deparse function name... */
+	appendStringInfo(buf, "json_value(");
+	/* ... and all argumnents */
+	foreach(arg, node->args)
+	{
+		if (arg_num == 1)
+		{
+			deparseExpr((Expr *) lfirst(arg), context);
+			appendStringInfo(buf, ", ");
+		}
+		else if (arg_num == 2)
+		{
+			deparseExpr((Expr *) lfirst(arg), context);
+		}
+		else
+		{
+			/* deparse option */
+			Expr	   *node;
+
+			node = lfirst(arg);
+
+			if (nodeTag(node) == T_Const)
+			{
+				Const	   *cnode = (Const *) node;
+				Oid			typoutput;
+				const char *valptr;
+				char	   *extval;
+				bool		typIsVarlena;
+
+				getTypeOutputInfo(cnode->consttype,
+								  &typoutput, &typIsVarlena);
+
+				extval = OidOutputFunctionCall(typoutput, cnode->constvalue);
+
+				appendStringInfoChar(buf, ' ');
+				for (valptr = extval; *valptr; valptr++)
+				{
+					char		ch = *valptr;
+
+					if (SQL_STR_DOUBLE(ch, true))
+						appendStringInfoChar(buf, ch);
+					appendStringInfoChar(buf, ch);
+				}
+			}
+			else
+			{
+				appendStringInfoChar(buf, ' ');
+				deparseExpr(node, context);
+			}
+		}
+		arg_num++;
+	}
+	appendStringInfoChar(buf, ')');
+}
+
+/*
+ * Deparse member_of() to ... MEMBER OF ... function
+ */
+static void
+mysql_append_memberof_func(FuncExpr *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	ListCell   *arg;
+	bool		first = true;
+
+	context->can_skip_cast = true;
+
+	foreach(arg, node->args)
+	{
+		if (first)
+		{
+			deparseExpr((Expr *) lfirst(arg), context);
+		}
+		else
+		{
+			appendStringInfo(buf, " MEMBER OF(");
+			deparseExpr((Expr *) lfirst(arg), context);
+			appendStringInfo(buf, ") ");
+		}
+		first = false;
+	}
+}
+
+/*
+ * append json_table function to FROM clause
+ */
+static void
+mysql_append_json_table_func(FuncExpr *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	ListCell   *arg;
+	int			arg_count = 1;
+
+	appendStringInfoString(buf, ", JSON_TABLE(");
+	foreach(arg, node->args)
+	{
+		Expr	   *n = lfirst(arg);
+		char	   *extval;
+		Const	   *cnode;
+
+		if (arg_count == 1)
+		{
+			deparseExpr(n, context);
+			appendStringInfoChar(buf, ',');
+			arg_count++;
+			continue;
+		}
+
+		if (!IsA(n, Const))
+			ereport(ERROR,
+					(errcode(ERRCODE_FDW_INVALID_ATTRIBUTE_VALUE),
+					 errmsg("Wrong input type for argument %d of JSON_TABLE", arg_count),
+					 errhint("Use string literal to describle column list.")));
+
+		cnode = (Const *) n;
+
+		if (arg_count == 2)
+		{
+			mysql_deparse_const(cnode, context);
+			arg_count++;
+			continue;
+		}
+		if (arg_count == 3)
+		{
+			int			num_elems = 0;
+			Datum	   *elem_values;
+			bool	   *elem_nulls;
+			Oid			elmtype;
+			int			i;
+			Oid			outputFunctionId;
+			bool		typeVarLength;
+
+			mysql_deconstruct_constant_array(cnode, &elem_nulls, &elem_values, &elmtype, &num_elems);
+			getTypeOutputInfo(elmtype, &outputFunctionId, &typeVarLength);
+
+			appendStringInfoString(buf, " COLUMNS(");
+			for (i = 0; i < num_elems; i++)
+			{
+				Assert(!elem_nulls[i]);
+				if (i > 0)
+					appendStringInfoString(buf, ", ");
+				extval = OidOutputFunctionCall(outputFunctionId, elem_values[i]);
+				appendStringInfo(buf, "%s", extval);
+			}
+			appendStringInfoString(buf, ")");
+			pfree(elem_values);
+			pfree(elem_nulls);
+			break;
+		}
+	}
+
+	appendStringInfo(buf, ") AS %s%d", REL_ALIAS_PREFIX, context->foreignrel->relid + 1);
+}
+
+/*
+ * Append convert function to buf
+ */
+static void
+mysql_append_convert_function(FuncExpr *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	ListCell   *arg;
+	bool		first = true;
+
+	appendStringInfoString(buf, "convert(");
+	foreach(arg, node->args)
+	{
+		Expr	   *n = lfirst(arg);
+
+		if (first == true)
+		{
+			deparseExpr(n, context);
+			appendStringInfoChar(buf, ',');
+			first = false;
+		}
+		else
+		{
+			Expr	   *node;
+
+			node = lfirst(arg);
+
+			if (nodeTag(node) == T_Const)
+			{
+				Const	   *cnode = (Const *) node;
+				Oid			typoutput;
+				const char *valptr;
+				char	   *extval;
+				bool		typIsVarlena;
+
+				getTypeOutputInfo(cnode->consttype,
+								  &typoutput, &typIsVarlena);
+				extval = OidOutputFunctionCall(typoutput, cnode->constvalue);
+
+				for (valptr = extval; *valptr; valptr++)
+				{
+					char		ch = *valptr;
+
+					if (SQL_STR_DOUBLE(ch, true))
+						appendStringInfoChar(buf, ch);
+					appendStringInfoChar(buf, ch);
+				}
+			}
+			else
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_FDW_INVALID_ATTRIBUTE_VALUE),
+						 errmsg("Wrong input type for argument 2 of CONVERT function.")));
+			}
+		}
+	}
+	appendStringInfoChar(buf, ')');
+}
+
+/*
+ * Deparse numeric cast from val::numeric(p,s) --> CAST(val AS DECIMAL(p,s))
+ */
+static void
+mysql_deparse_numeric_cast(FuncExpr *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	ListCell   *arg;
+	bool		first = true;
+
+	/* append function name ... */
+	appendStringInfoString(buf, "CAST(");
+
+	/* ... and all arguments */
+	Assert(list_length(node->args) == 2);
+	foreach(arg, node->args)
+	{
+		Expr	   *expr = lfirst(arg);
+
+		if (first == true)
+		{
+			deparseExpr(expr, context);
+			appendStringInfoString(buf, " AS DECIMAL");
+			first = false;
+		}
+		else
+		{
+			if (nodeTag(expr) == T_Const)
+			{
+				Const	   *cnode = (Const *) expr;
+				int32		typmod = 0;
+				int32		tmp_typmod;
+				int			precision;
+				int			scale;
+
+				if (cnode->consttype == INT4OID)
+					typmod = DatumGetInt32(cnode->constvalue);
+
+				if (typmod > (int32) (VARHDRSZ))
+				{
+					/*
+					 * Get the precision and scale out of the typmod value
+					 */
+					tmp_typmod = typmod - VARHDRSZ;
+					precision = (tmp_typmod >> 16) & 0xffff;
+					scale = tmp_typmod & 0xffff;
+
+					appendStringInfo(buf, "(%d, %d)", precision, scale);
+				}
+			}
+		}
+	}
+	appendStringInfoChar(buf, ')');
+}
+
+/*
+ * Deparse char and varchar cast to CAST(val AS char(n))
+ */
+static void
+mysql_deparse_string_cast(FuncExpr *node, deparse_expr_cxt *context, char *proname)
+{
+	StringInfo	buf = context->buf;
+	ListCell   *arg;
+	bool		first = true;
+
+	/* append function name ... */
+	appendStringInfoString(buf, "CAST(");
+
+	/* ... and all arguments */
+	Assert(list_length(node->args) == 3);
+	foreach(arg, node->args)
+	{
+		Expr	   *expr = lfirst(arg);
+
+		if (first == true)
+		{
+			deparseExpr(expr, context);
+			first = false;
+		}
+		else
+		{
+			appendStringInfo(buf, " AS %s", proname);
+			if (nodeTag(expr) == T_Const)
+			{
+				Const	   *cnode = (Const *) expr;
+				int32		typmod = 0;
+
+				if (cnode->consttype == INT4OID)
+					typmod = DatumGetInt32(cnode->constvalue);
+
+				if (typmod > (int32) (VARHDRSZ))
+				{
+					/*
+					 * Get the size from the typmod value
+					 */
+					typmod -= VARHDRSZ;
+
+					appendStringInfo(buf, "(%d)", typmod);
+				}
+			}
+			appendStringInfoChar(buf, ')');
+			break;
+		}
+	}
+}
+
+/*
+ * Deparse time, timetz, timestamp, timestamptz cast
+ */
+static void
+mysql_deparse_datetime_cast(FuncExpr *node, deparse_expr_cxt *context, char *proname)
+{
+	StringInfo	buf = context->buf;
+	ListCell   *arg;
+	bool		first = true;
+
+	/* append function name ... */
+	appendStringInfoString(buf, "CAST(");
+
+	/* ... and all arguments */
+	Assert(list_length(node->args) == 2);
+	foreach(arg, node->args)
+	{
+		Expr	   *expr = lfirst(arg);
+
+		if (first == true)
+		{
+			deparseExpr(expr, context);
+			first = false;
+		}
+		else
+		{
+			appendStringInfo(buf, " AS %s", proname);
+			if (nodeTag(expr) == T_Const)
+			{
+				Const	   *cnode = (Const *) expr;
+				int32		typmod = 0;
+
+				if (cnode->consttype == INT4OID)
+					typmod = DatumGetInt32(cnode->constvalue);
+
+				appendStringInfo(buf, "(%d)", typmod);
+			}
+			appendStringInfoChar(buf, ')');
+			break;
+		}
+	}
 }
 
 /*
@@ -1342,12 +2632,14 @@ static void
 mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context)
 {
 	StringInfo	buf = context->buf;
-	HeapTuple	proctup;
-	Form_pg_proc procform;
-	const char *proname;
+	char	   *proname;
+	char	   *origin_function;
 	bool		first;
 	ListCell   *arg;
-	bool        can_skip_cast = false;
+	bool		can_skip_cast = false;
+
+	/* If function has variadic argument, we do not add ARRAY[] when deparsing */
+	context->is_not_add_array = node->funcvariadic;
 
 	/*
 	 * If the function call came from an implicit coercion, then just show the
@@ -1362,104 +2654,185 @@ mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context)
 	/*
 	 * Normal function: display as proname(args).
 	 */
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(node->funcid));
-	if (!HeapTupleIsValid(proctup))
+	proname = get_func_name(node->funcid);
+	origin_function = proname;
+
+	/* check NULL for proname */
+	if (proname == NULL)
 		elog(ERROR, "cache lookup failed for function %u", node->funcid);
 
-	procform = (Form_pg_proc) GETSTRUCT(proctup);
-
-	/* Translate PostgreSQL function into mysql function */
-	proname = mysql_replace_function(NameStr(procform->proname));
-
-	if(strcmp(proname,"match_against")==0)
+	/* remove cast function if parent function can handle without cast */
+	if ((exist_in_function_list(proname, CastFunction)))
 	{
-		/* ... and all the arguments */
+		if (context->can_skip_cast == true &&
+			(list_length(node->args) == 1 ||
+			 strcmp(proname, "interval") == 0))
+		{
+			arg = list_head(node->args);
+			context->can_skip_cast = false;
+			deparseExpr((Expr *) lfirst(arg), context);
+			return;
+		}
+
+		if (strcmp(proname, "numeric") == 0)
+		{
+			mysql_deparse_numeric_cast(node, context);
+			return;
+		}
+		if (strcmp(proname, "bpchar") == 0 ||
+			strcmp(proname, "varchar") == 0)
+		{
+			mysql_deparse_string_cast(node, context, "char");
+			return;
+		}
+		if (strcmp(proname, "time") == 0 ||
+			strcmp(proname, "timetz") == 0)
+		{
+			mysql_deparse_datetime_cast(node, context, "time");
+			return;
+		}
+		if (strcmp(proname, "timestamp") == 0 ||
+			strcmp(proname, "timestamptz") == 0)
+		{
+			mysql_deparse_datetime_cast(node, context, "datetime");
+			return;
+		}
+	}
+
+	proname = mysql_replace_function(proname, node->args);
+
+	if (strcmp(proname, "match_against") == 0)
+	{
+		mysql_deparse_func_expr_match_against(node, context, buf, proname);
+		return;
+	}
+
+	if (strcmp(proname, "position") == 0)
+	{
+		mysql_deparse_func_expr_position(node, context, buf, proname);
+		return;
+	}
+
+	if (strcmp(proname, "trim") == 0)
+	{
+		mysql_deparse_func_expr_trim(node, context, buf, proname, origin_function);
+		return;
+	}
+
+	if (strcmp(proname, "weight_string") == 0)
+	{
+		mysql_deparse_func_expr_weight_string(node, context, buf, proname);
+		return;
+	}
+
+	if (strcmp(proname, "get_format") == 0 ||
+		strcmp(proname, "timestampadd") == 0 ||
+		strcmp(proname, "timestampdiff") == 0 ||
+		strcmp(proname, "extract") == 0)
+	{
 		first = true;
+		context->can_skip_cast = true;
+
+		/* Deparse the function name and all the arguments */
+		appendStringInfo(buf, "%s(", proname);
 		foreach(arg, node->args)
 		{
-			Expr *node;
-			ListCell   *lc;
-		    ArrayExpr *anode;
-			bool swt_arg;
-			node = lfirst(arg);
-			if (IsA(node, ArrayCoerceExpr))
+			if (!first)
 			{
-				node = (Expr *)((ArrayCoerceExpr *)node)->arg;
+				if (strcmp(proname, "extract") == 0)
+					appendStringInfoString(buf, " FROM ");
+				else
+					appendStringInfoString(buf, ", ");
 			}
-			Assert(nodeTag(node)==T_ArrayExpr);
-			anode = (ArrayExpr *)node;
-			appendStringInfoString(buf, "MATCH (");
-			swt_arg = true;
-			foreach(lc, anode->elements)
+			else
 			{
-				Expr *node;
-				node=lfirst(lc);
-				if(nodeTag(node)==T_Var){
-					if (!first)
-						appendStringInfoString(buf, ", ");
-					mysql_deparse_var((Var *)node,context);
-				}
-				else if(nodeTag(node)==T_Const){
-					Const *cnode = (Const *)node;
-					if(swt_arg == true){
-						appendStringInfoString(buf, ") AGAINST ( ");
-						swt_arg = false;
-						first = true;
-						mysql_deparse_const(cnode,context);
-						appendStringInfoString(buf, " ");
-					}
-					else{
-						Oid         typoutput;
-						const char *valptr;
-						char        *extval;
-						bool        typIsVarlena;
-						getTypeOutputInfo(cnode->consttype,
-										  &typoutput, &typIsVarlena);
-
-						extval = OidOutputFunctionCall(typoutput, cnode->constvalue);
-						for (valptr = extval; *valptr; valptr++)
-						{
-							char	ch = *valptr;
-							if (SQL_STR_DOUBLE(ch, true))
-								appendStringInfoChar(buf, ch);
-							appendStringInfoChar(buf, ch);
-						}
-					}
-				}
+				node = lfirst(arg);
+				Assert(nodeTag(node) == T_Const);
+				mysql_append_time_unit((Const *) node, context);
 				first = false;
+				continue;
 			}
-			appendStringInfoChar(buf, ')');
+
+			deparseExpr((Expr *) lfirst(arg), context);
+			first = false;
 		}
-		ReleaseSysCache(proctup);
+		appendStringInfoChar(buf, ')');
 
 		return;
 	}
 
-	/* remove cast function if parent function is can handle without cast */
-	if (context->can_skip_cast == true && (strcmp(NameStr(procform->proname), "float8") == 0 ||
-										   strcmp(NameStr(procform->proname), "numeric") == 0 ||
-										   strcmp(NameStr(procform->proname), "interval") == 0))
+	/*
+	 * Deparse function div, mod to operator syntax div(a, b) to (a div b)
+	 */
+
+	if (strcmp(proname, "div") == 0 ||
+		strcmp(proname, "mod") == 0)
 	{
-		ReleaseSysCache(proctup);
-		arg = list_head(node->args);
-		context->can_skip_cast = false;
-		deparseExpr((Expr *)lfirst(arg), context);
+		first = true;
+		context->can_skip_cast = true;
+
+		appendStringInfoChar(buf, '(');
+		foreach(arg, node->args)
+		{
+			if (!first)
+				appendStringInfo(buf, " %s ", proname);
+
+			deparseExpr((Expr *) lfirst(arg), context);
+			first = false;
+		}
+		appendStringInfoChar(buf, ')');
+
 		return;
 	}
 
-	/* inner function can skip cast if any */
-	if (strcmp(NameStr(procform->proname), "sqrt") == 0 || strcmp(NameStr(procform->proname), "log") == 0)
+	if (strcmp(proname, "json_value") == 0)
+	{
+		mysql_append_json_value_func(node, context);
+		return;
+	}
+
+	if (strcmp(proname, "json_table") == 0)
+	{
+		mysql_deparse_target_json_table_func(node, context);
+		return;
+	}
+
+	if (strcmp(proname, "member_of") == 0)
+	{
+		mysql_append_memberof_func(node, context);
+		return;
+	}
+
+	if (strcmp(proname, "convert") == 0)
+	{
+		mysql_append_convert_function(node, context);
+		return;
+	}
+
+	if (mysql_is_unique_func(node->funcid, origin_function) ||
+		mysql_is_supported_builtin_func(node->funcid, origin_function))
 		can_skip_cast = true;
+
+	/* inner function need convert time inverval to time unit */
+	if (strcmp(proname, "adddate") == 0 ||
+		strcmp(proname, "date_add") == 0 ||
+		strcmp(proname, "date_sub") == 0 ||
+		strcmp(proname, "subdate") == 0)
+		context->can_convert_unit_arg = true;
+
+	if (strcmp(proname, "addtime") == 0 ||
+		strcmp(proname, "subtime") == 0 ||
+		strcmp(proname, "timediff") == 0)
+		context->can_skip_convert_unit_arg = true;
 
 	/* Deparse the function name ... */
 	appendStringInfo(buf, "%s(", proname);
-
-	ReleaseSysCache(proctup);
 
 	/* ... and all the arguments */
 	first = true;
 	foreach(arg, node->args)
 	{
+		context->is_not_add_array = node->funcvariadic;
 		if (!first)
 			appendStringInfoString(buf, ", ");
 
@@ -1485,7 +2858,7 @@ mysql_deparse_func_expr(FuncExpr *node, deparse_expr_cxt *context)
 static bool
 mysql_deparse_op_divide(Expr *node, deparse_expr_cxt *context)
 {
-	bool is_convert = true;
+	bool		is_convert = true;
 
 	if (node == NULL)
 		return false;
@@ -1494,14 +2867,17 @@ mysql_deparse_op_divide(Expr *node, deparse_expr_cxt *context)
 	{
 		case T_Var:
 			{
-				Var		   		*var = (Var *) node;
-				RangeTblEntry 	*rte;
-				PlannerInfo 	*root = context->root;
-				int				col_type = 0;
-				int				varno = var->varno;
-				int				varattno = var->varattno;
+				Var		   *var = (Var *) node;
+				RangeTblEntry *rte;
+				PlannerInfo *root = context->root;
+				int			col_type = 0;
+				int			varno = var->varno;
+				int			varattno = var->varattno;
 
-				/* varno must not be any of OUTER_VAR, INNER_VAR and INDEX_VAR. */
+				/*
+				 * varno must not be any of OUTER_VAR, INNER_VAR and
+				 * INDEX_VAR.
+				 */
 				Assert(!IS_SPECIAL_VARNO(varno));
 
 				/* Get RangeTblEntry from array in PlannerInfo. */
@@ -1514,18 +2890,21 @@ mysql_deparse_op_divide(Expr *node, deparse_expr_cxt *context)
 		case T_Const:
 			{
 				Const	   *c = (Const *) node;
+
 				is_convert = IS_INTEGER_TYPE(c->consttype);
 			}
 			break;
 		case T_FuncExpr:
 			{
-				FuncExpr *f = (FuncExpr *) node;
+				FuncExpr   *f = (FuncExpr *) node;
+
 				is_convert = IS_INTEGER_TYPE(f->funcresulttype);
 			}
 			break;
 		case T_Aggref:
 			{
 				Aggref	   *agg = (Aggref *) node;
+
 				is_convert = IS_INTEGER_TYPE(agg->aggtype);
 			}
 			break;
@@ -1536,9 +2915,12 @@ mysql_deparse_op_divide(Expr *node, deparse_expr_cxt *context)
 				char		oprkind;
 				ListCell   *arg;
 
-				OpExpr *op = (OpExpr *) node;
+				OpExpr	   *op = (OpExpr *) node;
 
-				/* Retrieve information about the operator from system catalog. */
+				/*
+				 * Retrieve information about the operator from system
+				 * catalog.
+				 */
 				tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(op->opno));
 				if (!HeapTupleIsValid(tuple))
 					elog(ERROR, "cache lookup failed for operator %u", op->opno);
@@ -1547,8 +2929,8 @@ mysql_deparse_op_divide(Expr *node, deparse_expr_cxt *context)
 
 				/* Sanity check. */
 				Assert((oprkind == 'r' && list_length(op->args) == 1) ||
-					(oprkind == 'l' && list_length(op->args) == 1) ||
-					(oprkind == 'b' && list_length(op->args) == 2));
+					   (oprkind == 'l' && list_length(op->args) == 1) ||
+					   (oprkind == 'b' && list_length(op->args) == 2));
 				/* Check left operand. */
 				if (oprkind == 'r' || oprkind == 'b')
 				{
@@ -1585,9 +2967,13 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 	HeapTuple	tuple;
 	Form_pg_operator form;
 	char		oprkind;
+#if (PG_VERSION_NUM < 140000)
 	ListCell   *arg;
-	bool		is_convert = false; /* Flag to determine that convert '/' to 'DIV' or not */
-	bool		is_concat = false; /* Flag to use keyword 'CONCAT' instead of '||' */
+#endif
+	bool		is_convert = false; /* Flag to determine that convert '/' to
+									 * 'DIV' or not */
+	bool		is_concat = false;	/* Flag to use keyword 'CONCAT' instead of
+									 * '||' */
 
 	/* Retrieve information about the operator from system catalog. */
 	tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(node->opno));
@@ -1598,14 +2984,19 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 	oprkind = form->oprkind;
 
 	/* Sanity check. */
+#if (PG_VERSION_NUM >= 140000)
+	Assert((oprkind == 'l' && list_length(node->args) == 1) ||
+		   (oprkind == 'b' && list_length(node->args) == 2));
+#else
 	Assert((oprkind == 'r' && list_length(node->args) == 1) ||
 		   (oprkind == 'l' && list_length(node->args) == 1) ||
 		   (oprkind == 'b' && list_length(node->args) == 2));
+#endif
 
 	cur_opname = NameStr(form->oprname);
 	/* If opname is '/' check all type of operands recursively */
 	if (form->oprnamespace == PG_CATALOG_NAMESPACE && strcmp(cur_opname, "/") == 0)
-		is_convert = mysql_deparse_op_divide((Expr *)node, context);
+		is_convert = mysql_deparse_op_divide((Expr *) node, context);
 
 	if (strcmp(cur_opname, "||") == 0)
 	{
@@ -1617,7 +3008,15 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 		/* Always parenthesize the expression. */
 		appendStringInfoChar(buf, '(');
 	}
-	
+
+#if (PG_VERSION_NUM >= 140000)
+	/* Deparse left operand, if any. */
+	if (oprkind == 'b')
+	{
+		deparseExpr(linitial(node->args), context);
+		appendStringInfoChar(buf, ' ');
+	}
+#else
 	/* Deparse left operand. */
 	if (oprkind == 'r' || oprkind == 'b')
 	{
@@ -1625,10 +3024,11 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 		deparseExpr(lfirst(arg), context);
 		appendStringInfoChar(buf, ' ');
 	}
+#endif
 
 	/*
-	 * Deparse operator name.
-	 * If all operands are non floating point type, change '/' to 'DIV'.
+	 * Deparse operator name. If all operands are non floating point type,
+	 * change '/' to 'DIV'.
 	 */
 	if (is_convert)
 		appendStringInfoString(buf, "DIV");
@@ -1637,6 +3037,11 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 	else
 		mysql_deparse_operator_name(buf, form);
 
+#if (PG_VERSION_NUM >= 140000)
+	/* Deparse right operand. */
+	appendStringInfoChar(buf, ' ');
+	deparseExpr(llast(node->args), context);
+#else
 	/* Deparse right operand. */
 	if (oprkind == 'l' || oprkind == 'b')
 	{
@@ -1644,6 +3049,7 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 		appendStringInfoChar(buf, ' ');
 		deparseExpr(lfirst(arg), context);
 	}
+#endif
 
 	appendStringInfoChar(buf, ')');
 
@@ -1699,14 +3105,110 @@ static void
 mysql_deparse_distinct_expr(DistinctExpr *node, deparse_expr_cxt *context)
 {
 	StringInfo	buf = context->buf;
+	bool		outer_is_not_distinct_op = context->is_not_distinct_op;
 
 	Assert(list_length(node->args) == 2);
 
+	/*
+	 * Check value of is_not_distinct_op
+	 * If is_not_distinct_op is true:
+	 * IS NOT DISTINCT operator is equivalents with "<=>" operator in MySQL.
+	 * If is_not_distinct_op is false:
+	 * IS DISTINCT operator is equivalents NOT logic operator on "<=>" operator
+	 * expression in MySQL.
+	 */
+	if (!outer_is_not_distinct_op)
+	{
+		appendStringInfoString(buf, "(NOT ");
+	}
+
+	/* reset if having recursive IS DISTINCT/IS NOT DISTINCT clause */
+	context->is_not_distinct_op = false;
 	appendStringInfoChar(buf, '(');
 	deparseExpr(linitial(node->args), context);
-	appendStringInfoString(buf, " IS DISTINCT FROM ");
+	appendStringInfoString(buf, " <=> ");
 	deparseExpr(lsecond(node->args), context);
 	appendStringInfoChar(buf, ')');
+
+	/* recover after deparsing recursive IS DISTINCT/IS NOT DISTINCT clause */
+	context->is_not_distinct_op = outer_is_not_distinct_op;
+
+	/* close NOT expression */
+	if (!outer_is_not_distinct_op)
+	{
+		appendStringInfoString(buf, ")");
+	}
+
+}
+
+
+static void
+mysql_deparse_string(ScalarArrayOpExpr *node, deparse_expr_cxt *context, StringInfo buf, const char *extval, bool isstr, bool useIn)
+{
+	const char *valptr;
+	int			i = 0;
+	bool		deparseLeft = true;
+	Expr	   *arg1;
+	char	   *opname;
+
+	arg1 = linitial(node->args);
+	opname = get_opname(node->opno);
+
+	for (valptr = extval; *valptr; valptr++, i++)
+	{
+		char		ch = *valptr;
+
+		if (useIn)
+		{
+			if (i == 0 && isstr)
+				appendStringInfoChar(buf, '\'');
+		}
+		else if (deparseLeft)
+		{
+			/* Deparse left operand. */
+			deparseExpr(arg1, context);
+			/* Append operator */
+			appendStringInfo(buf, " %s ", opname);
+			if (isstr)
+				appendStringInfoChar(buf, '\'');
+			deparseLeft = false;
+		}
+
+		/*
+		 * Remove '{', '}' and \" character from the string. Because this
+		 * syntax is not recognize by the remote MySQL server.
+		 */
+		if ((ch == '{' && i == 0) || (ch == '}' && (i == (strlen(extval) - 1))) || ch == '\"')
+			continue;
+
+		if (ch == ',')
+		{
+			if (useIn)
+			{
+				if (isstr)
+					appendStringInfoChar(buf, '\'');
+				appendStringInfoChar(buf, ch);
+				appendStringInfoChar(buf, ' ');
+				if (isstr)
+					appendStringInfoChar(buf, '\'');
+			}
+			else
+			{
+				if (isstr)
+					appendStringInfoChar(buf, '\'');
+				if (node->useOr)
+					appendStringInfoString(buf, " OR ");
+				else
+					appendStringInfoString(buf, " AND ");
+				deparseLeft = true;
+			}
+			continue;
+		}
+		appendStringInfoChar(buf, ch);
+	}
+
+	if (isstr)
+		appendStringInfoChar(buf, '\'');
 }
 
 /*
@@ -1718,47 +3220,35 @@ mysql_deparse_scalar_array_op_expr(ScalarArrayOpExpr *node,
 								   deparse_expr_cxt *context)
 {
 	StringInfo	buf = context->buf;
-	HeapTuple	tuple;
 	Expr	   *arg1;
 	Expr	   *arg2;
-	Form_pg_operator form;
 	char	   *opname;
 	Oid			typoutput;
 	bool		typIsVarlena;
 	char	   *extval;
+	bool		useIn = false;
 
-	/* Retrieve information about the operator from system catalog. */
-	tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(node->opno));
-	if (!HeapTupleIsValid(tuple))
-		elog(ERROR, "cache lookup failed for operator %u", node->opno);
-	form = (Form_pg_operator) GETSTRUCT(tuple);
+	opname = get_opname(node->opno);
 
 	/* Sanity check. */
 	Assert(list_length(node->args) == 2);
 
-	opname = NameStr(form->oprname);
+	/* Using IN clause for '= ANY' and NOT IN clause for '<> ALL' */
+	if ((strcmp(opname, "=") == 0 && node->useOr == true) ||
+		(strcmp(opname, "<>") == 0 && node->useOr == false))
+		useIn = true;
+
+	/* Get left and right argument for deparsing */
+	arg1 = linitial(node->args);
+	arg2 = lsecond(node->args);
 
 	/*
-	 * Deparse right operand to check type of argument first.
-	 * For an fixed-len array, we use IN clause, e.g. ANY(ARRAY[1, 2, 3]).
-	 * For an variable-len array, we use FIND_IN_SET clause, e.g. ANY(ARRAY(SELECT * FROM table),
+	 * Deparse right operand to check type of argument first. For an fixed-len
+	 * array, we use IN clause, e.g. ANY(ARRAY[1, 2, 3]). For an variable-len
+	 * array, we use FIND_IN_SET clause, e.g. ANY(ARRAY(SELECT * FROM table),
 	 * because we can bind a string representation of array.
 	 */
-	arg2 = lsecond(node->args);
-	if (nodeTag((Node*)arg2) == T_Const)
-	{
-		/* Deparse left operand. */
-		arg1 = linitial(node->args);
-		deparseExpr(arg1, context);
-		appendStringInfoChar(buf, ' ');
-
-		if (strcmp(opname, "<>") == 0)
-			appendStringInfo(buf, " NOT ");
-
-		/* Deparse operator name plus decoration. */
-		appendStringInfo(buf, " IN (");
-	}
-	else
+	if (nodeTag((Node *) arg2) == T_Param)
 	{
 		if (strcmp(opname, "<>") == 0)
 			appendStringInfo(buf, " NOT ");
@@ -1767,9 +3257,27 @@ mysql_deparse_scalar_array_op_expr(ScalarArrayOpExpr *node,
 		appendStringInfo(buf, " FIND_IN_SET (");
 
 		/* Deparse left operand. */
-		arg1 = linitial(node->args);
 		deparseExpr(arg1, context);
 		appendStringInfoChar(buf, ',');
+	}
+	else
+	{
+		if (useIn)
+		{
+			/* Deparse left operand. */
+			deparseExpr(arg1, context);
+			appendStringInfoChar(buf, ' ');
+
+			/* Add IN clause */
+			if (strcmp(opname, "<>") == 0)
+			{
+				appendStringInfoString(buf, " NOT IN (");
+			}
+			else if (strcmp(opname, "=") == 0)
+			{
+				appendStringInfoString(buf, " IN (");
+			}
+		}
 	}
 
 	switch (nodeTag((Node *) arg2))
@@ -1778,35 +3286,99 @@ mysql_deparse_scalar_array_op_expr(ScalarArrayOpExpr *node,
 			{
 				Const	   *c = (Const *) arg2;
 
-				if (c->constisnull)
+				if (!c->constisnull)
+				{
+					getTypeOutputInfo(c->consttype,
+									  &typoutput, &typIsVarlena);
+					extval = OidOutputFunctionCall(typoutput, c->constvalue);
+
+					/* Determine array type */
+					switch (c->consttype)
+					{
+						case BOOLARRAYOID:
+						case INT8ARRAYOID:
+						case INT2ARRAYOID:
+						case INT4ARRAYOID:
+						case OIDARRAYOID:
+						case FLOAT4ARRAYOID:
+						case FLOAT8ARRAYOID:
+							mysql_deparse_string(node, context, buf, extval, false, useIn);
+							break;
+						default:
+							mysql_deparse_string(node, context, buf, extval, true, useIn);
+							break;
+					}
+				}
+				else
 				{
 					appendStringInfoString(buf, " NULL");
-					ReleaseSysCache(tuple);
-					return;
 				}
-
-				getTypeOutputInfo(c->consttype, &typoutput, &typIsVarlena);
-				extval = OidOutputFunctionCall(typoutput, c->constvalue);
-
-				switch (c->consttype)
-				{
-					case INT4ARRAYOID:
-					case OIDARRAYOID:
-						mysql_deparse_string(buf, extval, false);
-						break;
-					default:
-						mysql_deparse_string(buf, extval, true);
-						break;
-				}
+				break;
 			}
-			break;
-		default:
-			deparseExpr(arg2, context);
-			break;
-	}
-	appendStringInfoChar(buf, ')');
+		case T_ArrayExpr:
+			{
+				bool		first = true;
+				ListCell   *lc;
+				ArrayExpr  *a = (ArrayExpr *) arg2;
 
-	ReleaseSysCache(tuple);
+				foreach(lc, a->elements)
+				{
+					if (!first)
+					{
+						if (useIn)
+						{
+							appendStringInfoString(buf, ", ");
+						}
+						else
+						{
+							if (node->useOr)
+								appendStringInfoString(buf, " OR ");
+							else
+								appendStringInfoString(buf, " AND ");
+						}
+					}
+
+					if (useIn)
+					{
+						deparseExpr(lfirst(lc), context);
+					}
+					else
+					{
+						/* Deparse left argument */
+						appendStringInfoChar(buf, '(');
+						deparseExpr(arg1, context);
+						appendStringInfo(buf, " %s ", opname);
+
+						/* Deparse each element in right argument */
+						deparseExpr(lfirst(lc), context);
+						appendStringInfoChar(buf, ')');
+					}
+					first = false;
+				}
+				break;
+			}
+		case T_Param:
+			{
+				deparseExpr(arg2, context);
+				break;
+			}
+		default:
+			{
+				elog(ERROR, "unsupported expression type for deparse: %d", (int) nodeTag((Node *) arg2));
+				break;
+			}
+	}
+
+	/* Close IN clause */
+	if (useIn)
+	{
+		appendStringInfoChar(buf, ')');
+	}
+	if ((nodeTag((Node *) arg2) == T_Param && strcmp(opname, "=") == 0 && node->useOr == false) ||
+		(nodeTag((Node *) arg2) == T_Param && strcmp(opname, "<>") == 0 && node->useOr == true))
+	{
+		appendStringInfoChar(buf, ')');
+	}
 }
 
 /*
@@ -1831,6 +3403,7 @@ mysql_deparse_bool_expr(BoolExpr *node, deparse_expr_cxt *context)
 	const char *op = NULL;		/* keep compiler quiet */
 	bool		first;
 	ListCell   *lc;
+	Expr	   *arg;
 
 	switch (node->boolop)
 	{
@@ -1841,10 +3414,34 @@ mysql_deparse_bool_expr(BoolExpr *node, deparse_expr_cxt *context)
 			op = "OR";
 			break;
 		case NOT_EXPR:
-			appendStringInfoChar(buf, '(');
-			appendStringInfoString(buf, "NOT ");
-			deparseExpr(linitial(node->args), context);
-			appendStringInfoChar(buf, ')');
+
+			/*
+			 * Postgres has converted IS NOT DISTINCT expression to NOT (IS
+			 * DISTINCT) and pass it to mysql_fdw. We set is_not_distinct_op
+			 * equals to true to mark this conversion for further deparsing.
+			 */
+			arg = (Expr *) lfirst(list_head(node->args));
+			if (IsA(arg, DistinctExpr))
+			{
+				context->is_not_distinct_op = true;
+			}
+
+			/*
+			 * If expression is not IS NOT DISTINCT, we append NOT operator
+			 * here.
+			 */
+			if (!context->is_not_distinct_op)
+			{
+				appendStringInfoString(buf, "(NOT ");
+			}
+
+			deparseExpr(arg, context);
+
+			if (!context->is_not_distinct_op)
+			{
+				appendStringInfoString(buf, ")");
+			}
+
 			return;
 	}
 
@@ -1886,7 +3483,7 @@ mysql_deparse_aggref(Aggref *node, deparse_expr_cxt *context)
 	StringInfo	buf = context->buf;
 	bool		use_variadic;
 	Oid			func_rettype;
-	char		*func_name;
+	char	   *func_name;
 	bool		is_bit_func = false;
 
 	/* Only basic, non-split aggregation accepted. */
@@ -1895,12 +3492,13 @@ mysql_deparse_aggref(Aggref *node, deparse_expr_cxt *context)
 	/* Check if need to print VARIADIC (cf. ruleutils.c) */
 	use_variadic = node->aggvariadic;
 	func_rettype = get_func_rettype(node->aggfnoid);
-	func_name = pstrdup(get_func_name(node->aggfnoid));
+	func_name = get_func_name(node->aggfnoid);
+	func_name = mysql_replace_function(func_name, NIL);
 
 	/*
-	 * On Postgres, BIT_AND and BIT_OR return a signed bigint value.
-	 * On MySQL, BIT_AND and BIT_OR return an unsigned bigint value.
-	 * So, to display correct value on Postgres, we need to CAST return value AS SIGNED.
+	 * On Postgres, BIT_AND and BIT_OR return a signed bigint value. On MySQL,
+	 * BIT_AND and BIT_OR return an unsigned bigint value. So, to display
+	 * correct value on Postgres, we need to CAST return value AS SIGNED.
 	 */
 	if (strcmp(func_name, "bit_and") == 0 ||
 		strcmp(func_name, "bit_or") == 0)
@@ -1908,6 +3506,20 @@ mysql_deparse_aggref(Aggref *node, deparse_expr_cxt *context)
 		is_bit_func = true;
 		appendStringInfoString(buf, "CAST(");
 	}
+
+	/*
+	 * MySQL cannot calculate SUM, AVG correctly with time interval under
+	 * format "hh:mm:ss". We should convert time to second (plus microsecond
+	 * if needed).
+	 */
+	if ((func_rettype == INTERVALOID) && (strcmp(func_name, "sum") == 0 ||
+										  strcmp(func_name, "avg") == 0))
+	{
+		context->can_convert_time = true;
+		appendStringInfoString(buf, "SEC_TO_TIME(");
+	}
+	else
+		context->can_convert_time = false;
 
 	/* Find aggregate name from aggfnoid which is a pg_proc entry */
 	mysql_append_function_name(node->aggfnoid, context);
@@ -1917,20 +3529,8 @@ mysql_deparse_aggref(Aggref *node, deparse_expr_cxt *context)
 	appendStringInfo(buf, "%s", (node->aggdistinct != NIL) ? "DISTINCT " : "");
 
 	/*
-	 * MySQL cannot calculate SUM, AVG correctly with time interval under format "hh:mm:ss".
-	 * We should convert time to second (plus microsecond if needed).
-	 */
-	if ((func_rettype == INTERVALOID) && (strcmp(func_name, "sum") == 0 ||
-										  strcmp(func_name, "avg") == 0))
-	{
-		context->can_convert_time = true;
-	}
-	else
-		context->can_convert_time = false;
-
-	/* 
-	 * Skip cast for aggregation functions.
-	 * TODO: We may hanlde another functions in future if we have more test case with cast function.
+	 * Skip cast for aggregation functions. TODO: We may hanlde another
+	 * functions in future if we have more test case with cast function.
 	 */
 	if (strcmp(func_name, "count") == 0 ||
 		strcmp(func_name, "avg") == 0 ||
@@ -1970,6 +3570,13 @@ mysql_deparse_aggref(Aggref *node, deparse_expr_cxt *context)
 
 			deparseExpr((Expr *) n, context);
 		}
+
+		/* Add ORDER BY */
+		if (node->aggorder != NIL)
+		{
+			appendStringInfoString(buf, " ORDER BY ");
+			mysql_append_agg_order_by(node->aggorder, node->args, context);
+		}
 	}
 
 	appendStringInfoChar(buf, ')');
@@ -1977,9 +3584,83 @@ mysql_deparse_aggref(Aggref *node, deparse_expr_cxt *context)
 	if (is_bit_func)
 		appendStringInfoString(buf, " AS SIGNED)");
 
+	if (context->can_convert_time == true)
+		appendStringInfoChar(buf, ')');
+
 	/* Reset after finish deparsing */
 	context->can_convert_time = false;
 	context->can_skip_cast = false;
+}
+
+/*
+ * Append ORDER BY within aggregate function.
+ */
+static void
+mysql_append_agg_order_by(List *orderList, List *targetList, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	ListCell   *lc;
+	bool		first = true;
+
+	foreach(lc, orderList)
+	{
+		SortGroupClause *srt = (SortGroupClause *) lfirst(lc);
+		Node	   *sortexpr;
+		Oid			sortcoltype;
+		TypeCacheEntry *typentry;
+
+		if (!first)
+			appendStringInfoString(buf, ", ");
+		first = false;
+
+		sortexpr = mysql_deparse_sort_group_clause(srt->tleSortGroupRef, targetList,
+												   false, context);
+		sortcoltype = exprType(sortexpr);
+		/* See whether operator is default < or > for datatype */
+		typentry = lookup_type_cache(sortcoltype,
+									 TYPECACHE_LT_OPR | TYPECACHE_GT_OPR);
+		if (srt->sortop == typentry->lt_opr)
+			appendStringInfoString(buf, " ASC");
+		else if (srt->sortop == typentry->gt_opr)
+			appendStringInfoString(buf, " DESC");
+		else
+		{
+			HeapTuple	opertup;
+			Form_pg_operator operform;
+
+			appendStringInfoString(buf, " USING ");
+
+			/* Append operator name. */
+			opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(srt->sortop));
+			if (!HeapTupleIsValid(opertup))
+				elog(ERROR, "cache lookup failed for operator %u", srt->sortop);
+			operform = (Form_pg_operator) GETSTRUCT(opertup);
+			mysql_deparse_operator_name(buf, operform);
+			ReleaseSysCache(opertup);
+		}
+	}
+}
+
+/*
+ * Deparse a RowExpr node to mysql format agg_func(expr,[expr...])
+ * agg((col1, col2)) => agg(col1,col2)
+ */
+static void
+mysql_deparse_row_expr(RowExpr *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	bool		first = true;
+	ListCell   *lc;
+	Expr	   *expr;
+
+	foreach(lc, node->args)
+	{
+		if (!first)
+			appendStringInfoString(buf, ", ");
+		expr = (Expr *) lfirst(lc);
+		deparseExpr(expr, context);
+		first = false;
+	}
 }
 
 /*
@@ -1990,9 +3671,12 @@ mysql_deparse_array_expr(ArrayExpr *node, deparse_expr_cxt *context)
 {
 	StringInfo	buf = context->buf;
 	bool		first = true;
+	bool		is_not_add_array = context->is_not_add_array;
 	ListCell   *lc;
 
-	appendStringInfoString(buf, "ARRAY[");
+	if (!is_not_add_array)
+		appendStringInfoString(buf, "ARRAY[");
+
 	foreach(lc, node->elements)
 	{
 		if (!first)
@@ -2000,7 +3684,9 @@ mysql_deparse_array_expr(ArrayExpr *node, deparse_expr_cxt *context)
 		deparseExpr(lfirst(lc), context);
 		first = false;
 	}
-	appendStringInfoChar(buf, ']');
+
+	if (!is_not_add_array)
+		appendStringInfoChar(buf, ']');
 }
 
 /*
@@ -2047,8 +3733,8 @@ mysql_print_remote_placeholder(Oid paramtype, int32 paramtypmod,
  * be known to the remote server, if it's of an older version.  But keeping
  * track of that would be a huge exercise.
  */
-static bool
-is_builtin(Oid oid)
+bool
+mysql_is_builtin(Oid oid)
 {
 	return (oid < FirstBootstrapObjectId);
 }
@@ -2083,7 +3769,9 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 	inner_cxt.collation = InvalidOid;
 	inner_cxt.state = FDW_COLLATE_NONE;
 	inner_cxt.can_skip_cast = false;
-	inner_cxt.can_pushdown_interval = outer_cxt->can_pushdown_interval;
+	inner_cxt.op_flag = outer_cxt->op_flag;
+	inner_cxt.can_pushdown_function = false;
+	inner_cxt.can_use_outercast = false;
 
 	switch (nodeTag(node))
 	{
@@ -2102,26 +3790,29 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 					var->varlevelsup == 0 && var->varattno > 0)
 				{
 					/* Var belongs to foreign table */
-
-					/*
-					 * System columns other than ctid should not be sent to
-					 * the remote, since we don't make any effort to ensure
-					 * that local and remote values match (tableoid, in
-					 * particular, almost certainly doesn't match).
-					 */
-					if (var->varattno < 0 &&
-						var->varattno != SelfItemPointerAttributeNumber)
-						return false;
-
 					/* Else check the collation */
 					collation = var->varcollid;
 					state = OidIsValid(collation) ? FDW_COLLATE_SAFE : FDW_COLLATE_NONE;
+
+					/* Mysql do not have Array data type */
+					if (type_is_array(var->vartype))
+						elog(ERROR, "mysql_fdw: Not support array data type\n");
+
 				}
 				else
 				{
 					/* Var belongs to some other table */
 					if (var->varcollid != InvalidOid &&
 						var->varcollid != DEFAULT_COLLATION_OID)
+						return false;
+
+					/*
+					 * System columns should not be sent to the remote, since
+					 * we don't make any effort to ensure that local and
+					 * remote values match (tableoid, in particular, almost
+					 * certainly doesn't match).
+					 */
+					if (var->varattno < 0)
 						return false;
 
 					/* We can consider that it doesn't set collation */
@@ -2133,6 +3824,20 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 		case T_Const:
 			{
 				Const	   *c = (Const *) node;
+				char	   *type_name;
+
+				/*
+				 * Get type name based on the const value. If the type name is
+				 * "mysql_string_type" or "time_unit", allow it to push down
+				 * to remote.
+				 */
+				type_name = mysql_deparse_type_name(c->consttype, c->consttypmod);
+				if (strcmp(type_name, "public.mysql_string_type") == 0 ||
+					strcmp(type_name, "public.time_unit") == 0 ||
+					strcmp(type_name, "public.path_value[]") == 0)
+				{
+					check_type = false;
+				}
 
 				/*
 				 * If the constant has non default collation, either it's of a
@@ -2143,11 +3848,6 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 					c->constcollid != DEFAULT_COLLATION_OID)
 					return false;
 
-				/* Don't pushdown INTERVAL const if it is not inside aggregation functions (sum, avg) */
-				if (c->consttype == INTERVALOID &&
-					inner_cxt.can_pushdown_interval == false)
-					return false;
-
 				/* Otherwise, we can consider that it doesn't set collation */
 				collation = InvalidOid;
 				state = FDW_COLLATE_NONE;
@@ -2156,6 +3856,14 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 		case T_Param:
 			{
 				Param	   *p = (Param *) node;
+
+				/*
+				 * boolean op_flag is used to check operator If value op_flag
+				 * is true (operator are >, <, <=, >=), we will not push down
+				 * and vice versa
+				 */
+				if (inner_cxt.op_flag)
+					return false;
 
 				/*
 				 * Collation rule is same as for Consts and non-foreign Vars.
@@ -2178,29 +3886,60 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 				SubscriptingRef *ar = (SubscriptingRef *) node;
 #endif
 
+				Assert(list_length(ar->refupperindexpr) > 0);
 				/* Assignment should not be in restrictions. */
 				if (ar->refassgnexpr != NULL)
 					return false;
+
+#if (PG_VERSION_NUM >= 140000)
+
+				/*
+				 * Recurse into the remaining subexpressions.  The container
+				 * subscripts will not affect collation of the SubscriptingRef
+				 * result, so do those first and reset inner_cxt afterwards.
+				 */
+#else
 
 				/*
 				 * Recurse to remaining subexpressions.  Since the array
 				 * subscripts must yield (noncollatable) integers, they won't
 				 * affect the inner_cxt state.
 				 */
+#endif
+				/* Allow 1-D subcription, other case does not push down */
+				if (list_length(ar->refupperindexpr) > 1)
+					return false;
+
 				if (!foreign_expr_walker((Node *) ar->refupperindexpr,
 										 glob_cxt, &inner_cxt))
 					return false;
-				if (!foreign_expr_walker((Node *) ar->reflowerindexpr,
-										 glob_cxt, &inner_cxt))
+
+				/* Disable slice by checking reflowerindexpr [:] */
+				if (ar->reflowerindexpr)
 					return false;
+
+#if (PG_VERSION_NUM >= 140000)
+				inner_cxt.collation = InvalidOid;
+				inner_cxt.state = FDW_COLLATE_NONE;
+#endif
+				/* Disble subcripting for Var, eg: c1[1] by checking T_Var */
 				if (!foreign_expr_walker((Node *) ar->refexpr,
 										 glob_cxt, &inner_cxt))
 					return false;
+#if (PG_VERSION_NUM >= 140000)
 
 				/*
-				 * Array subscripting should yield same collation as input,
-				 * but for safety use same logic as for function nodes.
+				 * Container subscripting typically yields same collation as
+				 * refexpr's, but in case it doesn't, use same logic as for
+				 * function nodes.
 				 */
+#else
+
+				/*
+				 * Container subscripting should yield same collation as
+				 * input, but for safety use same logic as for function nodes.
+				 */
+#endif
 				collation = ar->refcollid;
 				if (collation == InvalidOid)
 					state = FDW_COLLATE_NONE;
@@ -2214,56 +3953,76 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 		case T_FuncExpr:
 			{
 				FuncExpr   *fe = (FuncExpr *) node;
-				char	   *opername = NULL;
-				Node       *node_arg = (Node *)fe->args;
+				char	   *funcname = NULL;
+				Node	   *node_arg = (Node *) fe->args;
+				bool		is_need_var = true;
+				bool		is_cast_functions = false;
+				bool		is_unique_func = false;
+				bool		is_common_function = false;
 
 				/*
 				 * If function used by the expression is not built-in, it
 				 * can't be sent to remote because it might have incompatible
 				 * semantics on remote side.
 				 */
-				tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(fe->funcid));
-				if (!HeapTupleIsValid(tuple))
-				{
-					elog(ERROR, "cache lookup failed for function %u", fe->funcid);
-				}
-				opername = pstrdup(((Form_pg_proc) GETSTRUCT(tuple))->proname.data);
-				ReleaseSysCache(tuple);
+				funcname = get_func_name(fe->funcid);
 
-				/* pushed down to mysql */
-				if (!is_builtin(fe->funcid) &&
-					strcmp(opername, "float8") != 0 &&
-					strcmp(opername, "numeric") != 0 &&
-					strcmp(opername, "log") != 0 &&
-					strcmp(opername, "match_against") != 0)
+				/* check NULL for funcname */
+				if (funcname == NULL)
+					elog(ERROR, "cache lookup failed for function %u", fe->funcid);
+
+				/* is cast functions */
+				if (exist_in_function_list(funcname, CastFunction))
+				{
+					is_cast_functions = true;
+				}
+				else
+				{
+					/* Mysql unique functions */
+					if (mysql_is_unique_func(fe->funcid, funcname))
+						is_unique_func = true;
+
+					/* Mysql supported builtin functions */
+					if (mysql_is_supported_builtin_func(fe->funcid, funcname))
+						is_common_function = true;
+				}
+
+				/* Does not push down function to mysql if not */
+				if (!is_cast_functions &&
+					!is_unique_func &&
+					!is_common_function)
 					return false;
 
-				/* inner function can skip float cast if any */
-				if (strcmp(opername, "sqrt") == 0 || strcmp(opername, "log") == 0)
+				/* inner function can skip numeric cast if any */
+				if (is_common_function || is_unique_func)
 					inner_cxt.can_skip_cast = true;
 
-				/* Accept type cast functions if outer is specific functions */
-				if (strcmp(opername, "float8") == 0 ||
-					strcmp(opername, "float4") == 0 ||
-					strcmp(opername, "int2") == 0 ||
-					strcmp(opername, "int4") == 0 ||
-					strcmp(opername, "int8") == 0 ||
-					strcmp(opername, "numeric") == 0)
-				{
-					if (outer_cxt->can_skip_cast == false)
-						return false;
-				}
-
-				if (strcmp(opername, "match_against") == 0 && IsA(node_arg, List))
+				if (strcmp(funcname, "match_against") == 0 && IsA(node_arg, List))
 				{
 					List	   *l = (List *) node_arg;
 					ListCell   *lc = list_head(l);
 
-					node_arg = (Node *)lfirst(lc);
+					node_arg = (Node *) lfirst(lc);
 					if (IsA(node_arg, ArrayCoerceExpr))
 					{
-						node_arg = (Node *)((ArrayCoerceExpr *)node_arg)->arg;
+						node_arg = (Node *) ((ArrayCoerceExpr *) node_arg)->arg;
 					}
+				}
+
+				if (strcmp(funcname, "json_extract") == 0 ||
+					strcmp(funcname, "json_value") == 0 ||
+					strcmp(funcname, "json_unquote") == 0 ||
+					strcmp(funcname, "convert") == 0)
+				{
+					outer_cxt->can_use_outercast = true;
+				}
+
+				if (is_unique_func || is_common_function)
+				{
+					inner_cxt.can_skip_cast = true;
+					outer_cxt->can_pushdown_function = true;
+					inner_cxt.can_pushdown_function = true;
+					is_need_var = false;
 				}
 
 				/*
@@ -2273,43 +4032,102 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 										 glob_cxt, &inner_cxt))
 					return false;
 
-				/*
-				 * If function's input collation is not derived from a foreign
-				 * Var, it can't be sent to remote.
-				 */
-				if (fe->inputcollid == InvalidOid)
-					 /* OK, inputs are all noncollatable */ ;
-				else if (inner_cxt.state != FDW_COLLATE_SAFE ||
-						 fe->inputcollid != inner_cxt.collation)
-					return false;
+				if (inner_cxt.can_pushdown_function == true)
+					outer_cxt->can_pushdown_function = true;
 
-				/*
-				 * Detect whether node is introducing a collation not derived
-				 * from a foreign Var.  (If so, we just mark it unsafe for now
-				 * rather than immediately returning false, since the parent
-				 * node might not care.)
-				 */
-				collation = fe->funccollid;
-				if (collation == InvalidOid)
+				/* Accept type cast functions if outer is specific functions */
+				if (is_cast_functions == true && strcmp(funcname, "interval") != 0)
+				{
+					if (inner_cxt.can_use_outercast == true)
+					{
+						if (list_length(fe->args) > 1)
+						{
+							/* outer/inner type modifier can pushdown */
+							if ((strcmp(funcname, "numeric") == 0 ||
+								 strcmp(funcname, "bpchar") == 0 ||
+								 strcmp(funcname, "varchar") == 0) ||
+								strcmp(funcname, "time") == 0 ||
+								strcmp(funcname, "timetz") == 0 ||
+								strcmp(funcname, "timestamp") == 0 ||
+								strcmp(funcname, "timestamptz") == 0)
+							{
+								outer_cxt->can_pushdown_function = true;
+								is_need_var = false;
+							}
+							else
+								return false;
+						}
+					}
+					else if (fe->funcformat == COERCE_IMPLICIT_CAST)
+					{
+						outer_cxt->can_skip_cast = true;
+						is_need_var = false;
+					}
+					else if (outer_cxt->can_skip_cast == false)
+						return false;
+				}
+
+				if (!is_need_var)
+				{
+					collation = InvalidOid;
 					state = FDW_COLLATE_NONE;
-				else if (inner_cxt.state == FDW_COLLATE_SAFE &&
-						 collation == inner_cxt.collation)
-					state = FDW_COLLATE_SAFE;
+					check_type = false;
+				}
 				else
-					state = FDW_COLLATE_UNSAFE;
+				{
+					/*
+					 * If function's input collation is not derived from a
+					 * foreign Var, it can't be sent to remote.
+					 */
+					if (fe->inputcollid == InvalidOid)
+						 /* OK, inputs are all noncollatable */ ;
+					else if (inner_cxt.state != FDW_COLLATE_SAFE ||
+							 fe->inputcollid != inner_cxt.collation)
+						return false;
+
+					/*
+					 * Detect whether node is introducing a collation not
+					 * derived from a foreign Var.  (If so, we just mark it
+					 * unsafe for now rather than immediately returning false,
+					 * since the parent node might not care.)
+					 */
+					collation = fe->funccollid;
+					if (collation == InvalidOid)
+						state = FDW_COLLATE_NONE;
+					else if (inner_cxt.state == FDW_COLLATE_SAFE &&
+							 collation == inner_cxt.collation)
+						state = FDW_COLLATE_SAFE;
+					else
+						state = FDW_COLLATE_UNSAFE;
+				}
 			}
 			break;
 		case T_OpExpr:
 		case T_DistinctExpr:	/* struct-equivalent to OpExpr */
 			{
 				OpExpr	   *oe = (OpExpr *) node;
+				char	   *oprname;
+				Form_pg_operator form;
 
 				/*
 				 * Similarly, only built-in operators can be sent to remote.
 				 * (If the operator is, surely its underlying function is
 				 * too.)
 				 */
-				if (!is_builtin(oe->opno))
+				if (!mysql_is_builtin(oe->opno))
+					return false;
+
+				tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(oe->opno));
+				if (!HeapTupleIsValid(tuple))
+					elog(ERROR, "cache lookup failed for operator %u", oe->opno);
+				form = (Form_pg_operator) GETSTRUCT(tuple);
+
+				/* Get operation name */
+				oprname = pstrdup(NameStr(form->oprname));
+				ReleaseSysCache(tuple);
+
+				/* MySQL does not support ! */
+				if (strcmp(oprname, "!") == 0)
 					return false;
 
 				/*
@@ -2319,15 +4137,22 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 										 glob_cxt, &inner_cxt))
 					return false;
 
-				/*
-				 * If operator's input collation is not derived from a foreign
-				 * Var, it can't be sent to remote.
-				 */
-				if (oe->inputcollid == InvalidOid)
-					 /* OK, inputs are all noncollatable */ ;
-				else if (inner_cxt.state != FDW_COLLATE_SAFE ||
-						 oe->inputcollid != inner_cxt.collation)
-					return false;
+				if (inner_cxt.can_pushdown_function == false)
+				{
+					/*
+					 * If operator's input collation is not derived from a
+					 * foreign Var, it can't be sent to remote.
+					 */
+					if (oe->inputcollid == InvalidOid)
+						 /* OK, inputs are all noncollatable */ ;
+					else if (inner_cxt.state != FDW_COLLATE_SAFE ||
+							 oe->inputcollid != inner_cxt.collation)
+						return false;
+				}
+				else
+				{
+					outer_cxt->can_pushdown_function = true;
+				}
 
 				/* Result-collation handling is same as for functions */
 				collation = oe->opcollid;
@@ -2343,11 +4168,28 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 		case T_ScalarArrayOpExpr:
 			{
 				ScalarArrayOpExpr *oe = (ScalarArrayOpExpr *) node;
+				char	   *opname;
+
+				opname = get_opname(oe->opno);
+
+				/*
+				 * Value opname which is represented for type of operator If
+				 * ARRRAY has parameter is sub-query and operator are >, <,
+				 * >=, <=, set value for op_flag boolean is true In these
+				 * case, we do not push down
+				 */
+				if (strcmp(opname, "<") == 0 ||
+					strcmp(opname, ">") == 0 ||
+					strcmp(opname, "<=") == 0 ||
+					strcmp(opname, ">=") == 0)
+				{
+					inner_cxt.op_flag = true;
+				}
 
 				/*
 				 * Again, only built-in operators can be sent to remote.
 				 */
-				if (!is_builtin(oe->opno))
+				if (!mysql_is_builtin(oe->opno))
 					return false;
 
 				/*
@@ -2356,6 +4198,8 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 				if (!foreign_expr_walker((Node *) oe->args,
 										 glob_cxt, &inner_cxt))
 					return false;
+
+				inner_cxt.op_flag = false;
 
 				/*
 				 * If operator's input collation is not derived from a foreign
@@ -2433,8 +4277,7 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 			{
 				Aggref	   *agg = (Aggref *) node;
 				ListCell   *lc;
-				char	   *opername = NULL;
-				Oid			schema;
+				char	   *aggname = NULL;
 
 				/* Not safe to pushdown when not in grouping context */
 				if (!IS_UPPER_REL(glob_cxt->foreignrel))
@@ -2444,47 +4287,13 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 				if (agg->aggsplit != AGGSPLIT_SIMPLE)
 					return false;
 
-				/* get function name and schema */
-				tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(agg->aggfnoid));
-				if (!HeapTupleIsValid(tuple))
-				{
-					elog(ERROR, "cache lookup failed for function %u", agg->aggfnoid);
-				}
-				opername = pstrdup(((Form_pg_proc) GETSTRUCT(tuple))->proname.data);
-				schema = ((Form_pg_proc) GETSTRUCT(tuple))->pronamespace;
-				ReleaseSysCache(tuple);
+				/* get function name */
+				aggname = get_func_name(agg->aggfnoid);
+				aggname = mysql_replace_function(aggname, NIL);
 
-				/* ignore functions in other than the pg_catalog schema */
-				if (schema != PG_CATALOG_NAMESPACE)
+				if (!exist_in_function_list(aggname, MysqlUniqueAggFunction) &&
+					!exist_in_function_list(aggname, MysqlSupportedBuiltinAggFunction))
 					return false;
-
-				/* can pushdown interval const in aggregation functions (sum, avg) */
-				if ((strcmp(opername, "sum") == 0
-					|| strcmp(opername, "avg") == 0) 
-					&& get_func_rettype(agg->aggfnoid) == INTERVALOID)
-				{
-					inner_cxt.can_pushdown_interval = true;
-				}
-
-				/* these function can be passed to Mysql */
-				if (!(strcmp(opername, "sum") == 0
-					  || strcmp(opername, "avg") == 0
-					  || strcmp(opername, "max") == 0
-					  || strcmp(opername, "min") == 0
-					  || strcmp(opername, "bit_and") == 0
-					  || strcmp(opername, "bit_or") == 0
-					  || strcmp(opername, "json_agg") == 0
-					  || strcmp(opername, "json_object_agg") == 0
-					  || strcmp(opername, "stddev") == 0
-					  || strcmp(opername, "stddev_pop") == 0
-					  || strcmp(opername, "stddev_samp") == 0
-					  || strcmp(opername, "var_pop") == 0
-					  || strcmp(opername, "var_samp") == 0
-					  || strcmp(opername, "variance") == 0
-					  || strcmp(opername, "count") == 0))
-				{
-					return false;
-				}
 
 				/*
 				 * Recurse to input args. aggdirectargs, aggorder and
@@ -2507,10 +4316,18 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 						return false;
 				}
 
-				/* Reset after checking aggregation */
-				inner_cxt.can_pushdown_interval = false;
+				if (agg->aggorder)
+				{
+					/* We support ORDER BY inside these aggregate functions */
+					if (!(strcmp(aggname, "group_concat") == 0 ||
+						  strcmp(aggname, "json_arrayagg") == 0 ||
+						  strcmp(aggname, "json_objectagg") == 0))
+					{
+						return false;
+					}
+				}
 
-				if (agg->aggorder || agg->aggfilter)
+				if (agg->aggfilter)
 				{
 					return false;
 				}
@@ -2575,6 +4392,7 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 
 				/* inherit can_skip_cast flag */
 				inner_cxt.can_skip_cast = outer_cxt->can_skip_cast;
+				inner_cxt.can_pushdown_function = outer_cxt->can_pushdown_function;
 
 				/*
 				 * Recurse to component subexpressions.
@@ -2586,6 +4404,15 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 						return false;
 				}
 
+				if (inner_cxt.can_pushdown_function == true)
+					outer_cxt->can_pushdown_function = true;
+
+				if (inner_cxt.can_skip_cast == true)
+					outer_cxt->can_skip_cast = true;
+
+				if (inner_cxt.can_use_outercast == true)
+					outer_cxt->can_use_outercast = true;
+
 				/*
 				 * When processing a list, collation state just bubbles up
 				 * from the list elements.
@@ -2594,6 +4421,68 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 				state = inner_cxt.state;
 
 				/* Don't apply exprType() to the list. */
+				check_type = false;
+			}
+			break;
+		case T_RowExpr:
+			/* Enable to support count(expr, [expr]) */
+			{
+				collation = InvalidOid;
+				state = FDW_COLLATE_NONE;
+			}
+			break;
+		case T_CoerceViaIO:
+			{
+				/* Accept cast function outer of json_extract and json_value */
+				CoerceViaIO *c = (CoerceViaIO *) node;
+
+				if (IsA(c->arg, FuncExpr))
+				{
+					FuncExpr   *fe = (FuncExpr *) c->arg;
+					char	   *func_name;
+
+					func_name = get_func_name(fe->funcid);
+
+					if (!(strcmp(func_name, "json_extract") == 0 ||
+						  strcmp(func_name, "json_value") == 0 ||
+						  strcmp(func_name, "json_unquote") == 0 ||
+						  strcmp(func_name, "convert") == 0))
+						return false;
+
+					if (!foreign_expr_walker((Node *) c->arg,
+											 glob_cxt, &inner_cxt))
+						return false;
+
+					if (inner_cxt.can_pushdown_function == true)
+						outer_cxt->can_pushdown_function = true;
+
+					if (inner_cxt.can_use_outercast == true)
+						outer_cxt->can_use_outercast = true;
+				}
+				else
+				{
+					return false;
+				}
+
+				/* Output is always boolean and so noncollatable. */
+				collation = InvalidOid;
+				state = FDW_COLLATE_NONE;
+				check_type = false;
+			}
+			break;
+		case T_FieldSelect:
+
+			/*
+			 * Allow pushdown FieldSelect to support accessing value of record
+			 * of json_table functions
+			 */
+			{
+				if (!(glob_cxt->foreignrel->reloptkind == RELOPT_BASEREL ||
+					  glob_cxt->foreignrel->reloptkind == RELOPT_OTHER_MEMBER_REL))
+					return false;
+
+				collation = InvalidOid;
+				state = FDW_COLLATE_NONE;
 				check_type = false;
 			}
 			break;
@@ -2610,7 +4499,7 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 	 * If result type of given expression is not built-in, it can't be sent to
 	 * remote because it might have incompatible semantics on remote side.
 	 */
-	if (check_type && !is_builtin(exprType(node)))
+	if (check_type && !mysql_is_builtin(exprType(node)))
 		return false;
 
 	/*
@@ -2692,7 +4581,7 @@ mysql_is_foreign_expr(PlannerInfo *root, RelOptInfo *baserel, Expr *expr)
 	loc_cxt.collation = InvalidOid;
 	loc_cxt.state = FDW_COLLATE_NONE;
 	loc_cxt.can_skip_cast = false;
-	loc_cxt.can_pushdown_interval = false;
+	loc_cxt.op_flag = false;
 	if (!foreign_expr_walker((Node *) expr, &glob_cxt, &loc_cxt))
 		return false;
 
@@ -2704,8 +4593,8 @@ mysql_is_foreign_expr(PlannerInfo *root, RelOptInfo *baserel, Expr *expr)
 		return false;
 
 	/* Expressions examined here should be boolean, ie noncollatable */
-	// Assert(loc_cxt.collation == InvalidOid);
-	// Assert(loc_cxt.state == FDW_COLLATE_NONE);
+	/* Assert(loc_cxt.collation == InvalidOid); */
+	/* Assert(loc_cxt.state == FDW_COLLATE_NONE); */
 
 	/* OK to evaluate on the remote server */
 	return true;
@@ -2725,8 +4614,8 @@ mysql_is_foreign_expr(PlannerInfo *root, RelOptInfo *baserel, Expr *expr)
  */
 bool
 mysql_is_foreign_param(PlannerInfo *root,
-				 RelOptInfo *baserel,
-				 Expr *expr)
+					   RelOptInfo *baserel,
+					   Expr *expr)
 {
 	if (expr == NULL)
 		return false;
@@ -2765,31 +4654,28 @@ mysql_is_foreign_param(PlannerInfo *root,
  *****************************************************************************/
 
 /*
- * contain_immutable_functions
- *	  Recursively search for immutable functions within a clause.
+ * mysql_contain_functions
+ * Recursively search for immutable, stable and volatile functions within a clause.
  *
- * Returns true if any immutable function (or operator implemented by a
- * immutable function) is found.
+ * Returns true if any function (or operator implemented by a function) is found.
  *
  * We will recursively look into TargetEntry exprs.
  */
 static bool
-mysql_contain_immutable_functions(Node *clause)
+mysql_contain_functions(Node *clause)
 {
-	return mysql_contain_immutable_functions_walker(clause, NULL);
+	return mysql_contain_functions_walker(clause, NULL);
 }
 
 static bool
-mysql_contain_immutable_functions_walker(Node *node, void *context)
+mysql_contain_functions_walker(Node *node, void *context)
 {
 	if (node == NULL)
 		return false;
-	/* Check for mutable functions in node itself */
+	/* Check for functions in node itself */
 	if (nodeTag(node) == T_FuncExpr)
 	{
-		FuncExpr *expr = (FuncExpr *) node;
-		if (func_volatile(expr->funcid) == PROVOLATILE_IMMUTABLE)
-			return true;
+		return true;
 	}
 
 	/*
@@ -2807,29 +4693,26 @@ mysql_contain_immutable_functions_walker(Node *node, void *context)
 	{
 		/* Recurse into subselects */
 		return query_tree_walker((Query *) node,
-								 mysql_contain_immutable_functions_walker,
+								 mysql_contain_functions_walker,
 								 context, 0);
 	}
-	return expression_tree_walker(node, mysql_contain_immutable_functions_walker,
+	return expression_tree_walker(node, mysql_contain_functions_walker,
 								  context);
 }
 
 /*
  * Returns true if given tlist is safe to evaluate on the foreign server.
  */
-bool mysql_is_foreign_function_tlist(PlannerInfo *root,
-									 RelOptInfo *baserel,
-									 List *tlist)
+bool
+mysql_is_foreign_function_tlist(PlannerInfo *root,
+								RelOptInfo *baserel,
+								List *tlist)
 {
 	foreign_glob_cxt glob_cxt;
-	foreign_loc_cxt  loc_cxt;
+	foreign_loc_cxt loc_cxt;
 	MySQLFdwRelationInfo *fpinfo = (MySQLFdwRelationInfo *) (baserel->fdw_private);
-	ListCell        *lc;
-	bool             is_contain_function;
-
-	if (!(baserel->reloptkind == RELOPT_BASEREL ||
-		  baserel->reloptkind == RELOPT_OTHER_MEMBER_REL))
-		return false;
+	ListCell   *lc;
+	bool		is_contain_function;
 
 	/*
 	 * Check that the expression consists of any immutable function.
@@ -2839,7 +4722,7 @@ bool mysql_is_foreign_function_tlist(PlannerInfo *root,
 	{
 		TargetEntry *tle = lfirst_node(TargetEntry, lc);
 
-		if (mysql_contain_immutable_functions((Node *) tle->expr))
+		if (mysql_contain_functions((Node *) tle->expr))
 		{
 			is_contain_function = true;
 			break;
@@ -2861,9 +4744,10 @@ bool mysql_is_foreign_function_tlist(PlannerInfo *root,
 		glob_cxt.foreignrel = baserel;
 
 		/*
-		 * For an upper relation, use relids from its underneath scan relation,
-		 * because the upperrel's own relids currently aren't set to anything
-		 * meaningful by the cor  e code.For other relation, use their own relids.
+		 * For an upper relation, use relids from its underneath scan
+		 * relation, because the upperrel's own relids currently aren't set to
+		 * anything meaningful by the cor  e code.For other relation, use
+		 * their own relids.
 		 */
 		if (IS_UPPER_REL(baserel))
 			glob_cxt.relids = fpinfo->outerrel->relids;
@@ -2873,7 +4757,8 @@ bool mysql_is_foreign_function_tlist(PlannerInfo *root,
 		loc_cxt.collation = InvalidOid;
 		loc_cxt.state = FDW_COLLATE_NONE;
 		loc_cxt.can_skip_cast = false;
-		loc_cxt.can_pushdown_interval = false;
+		loc_cxt.op_flag = false;
+		loc_cxt.can_pushdown_function = false;
 
 		if (!foreign_expr_walker((Node *) tle->expr, &glob_cxt, &loc_cxt))
 			return false;
@@ -2886,14 +4771,21 @@ bool mysql_is_foreign_function_tlist(PlannerInfo *root,
 			return false;
 
 		/*
-		 * An expression which includes any mutable functions can't be sent over
-		 * because its result is not stable.  For example, sending now() remote
-		 * side could cause confusion from clock offsets.  Future versions might
-		 * be able to make this choice with more granularity.  (We check this last
-		 * because it requires a lot of expensive catalog lookups.)
+		 * An expression which includes any mutable functions can't be sent
+		 * over because its result is not stable.  For example, sending now()
+		 * remote side could cause confusion from clock offsets.  Future
+		 * versions might be able to make this choice with more granularity.
+		 * (We check this last because it requires a lot of expensive catalog
+		 * lookups.)
 		 */
-		if (contain_mutable_functions((Node *) tle->expr))
-			return false;
+		if (!IsA(tle->expr, FieldSelect))
+		{
+			if (loc_cxt.can_pushdown_function == false &&
+				contain_mutable_functions((Node *) tle->expr))
+			{
+				return false;
+			}
+		}
 	}
 
 	/* OK for the target list with functions to evaluate on the remote server */
@@ -2940,9 +4832,9 @@ mysql_get_jointype_name(JoinType jointype)
  */
 static void
 mysql_deparse_explicit_target_list(List *tlist,
-						  bool is_returning,
-						  List **retrieved_attrs,
-						  deparse_expr_cxt *context)
+								   bool is_returning,
+								   List **retrieved_attrs,
+								   deparse_expr_cxt *context)
 {
 	ListCell   *lc;
 	StringInfo	buf = context->buf;
@@ -3011,10 +4903,10 @@ mysql_deparse_subquery_target_list(deparse_expr_cxt *context)
  */
 void
 mysql_classify_conditions(PlannerInfo *root,
-				   RelOptInfo *baserel,
-				   List *input_conds,
-				   List **remote_conds,
-				   List **local_conds)
+						  RelOptInfo *baserel,
+						  List *input_conds,
+						  List **remote_conds,
+						  List **local_conds)
 {
 	ListCell   *lc;
 
@@ -3099,8 +4991,8 @@ mysql_deparse_from_expr_for_rel(StringInfo buf, PlannerInfo *root, RelOptInfo *f
 		{
 			initStringInfo(&join_sql_o);
 			mysql_deparse_range_tbl_ref(&join_sql_o, root, outerrel,
-								fpinfo->make_outerrel_subquery,
-								ignore_rel, ignore_conds, params_list);
+										fpinfo->make_outerrel_subquery,
+										ignore_rel, ignore_conds, params_list);
 
 			/*
 			 * If inner relation is the target relation, skip deparsing it.
@@ -3125,8 +5017,8 @@ mysql_deparse_from_expr_for_rel(StringInfo buf, PlannerInfo *root, RelOptInfo *f
 		{
 			initStringInfo(&join_sql_i);
 			mysql_deparse_range_tbl_ref(&join_sql_i, root, innerrel,
-							   			fpinfo->make_innerrel_subquery,
-							   			ignore_rel, ignore_conds, params_list);
+										fpinfo->make_innerrel_subquery,
+										ignore_rel, ignore_conds, params_list);
 
 			/*
 			 * If outer relation is the target relation, skip deparsing it.
@@ -3162,7 +5054,9 @@ mysql_deparse_from_expr_for_rel(StringInfo buf, PlannerInfo *root, RelOptInfo *f
 			context.scanrel = foreignrel;
 			context.root = root;
 			context.params_list = params_list;
+			context.is_not_add_array = false;
 			context.can_convert_time = false;
+			context.json_table_expr = NULL;
 
 			appendStringInfoChar(buf, '(');
 			mysql_append_conditions(fpinfo->joinclauses, &context);
@@ -3183,6 +5077,7 @@ mysql_deparse_from_expr_for_rel(StringInfo buf, PlannerInfo *root, RelOptInfo *f
 		 * can use NoLock here.
 		 */
 		Relation	rel;
+
 		rel = table_open(rte->relid, NoLock);
 
 		mysql_deparse_relation(buf, rel);
@@ -3204,8 +5099,8 @@ mysql_deparse_from_expr_for_rel(StringInfo buf, PlannerInfo *root, RelOptInfo *f
  */
 static void
 mysql_deparse_range_tbl_ref(StringInfo buf, PlannerInfo *root, RelOptInfo *foreignrel,
-				   			bool make_subquery, Index ignore_rel, List **ignore_conds,
-				   			List **params_list)
+							bool make_subquery, Index ignore_rel, List **ignore_conds,
+							List **params_list)
 {
 	MySQLFdwRelationInfo *fpinfo = (MySQLFdwRelationInfo *) foreignrel->fdw_private;
 
@@ -3231,9 +5126,9 @@ mysql_deparse_range_tbl_ref(StringInfo buf, PlannerInfo *root, RelOptInfo *forei
 		/* Deparse the subquery representing the relation. */
 		appendStringInfoChar(buf, '(');
 		mysql_deparse_select_stmt_for_rel(buf, root, foreignrel, NIL,
-								fpinfo->remote_conds, NIL,
-								false, false, true,
-								&retrieved_attrs, params_list);
+										  fpinfo->remote_conds, NIL,
+										  false, false, true,
+										  &retrieved_attrs, params_list);
 		appendStringInfoChar(buf, ')');
 
 		/* Append the relation alias. */
@@ -3263,7 +5158,7 @@ mysql_deparse_range_tbl_ref(StringInfo buf, PlannerInfo *root, RelOptInfo *forei
 	}
 	else
 		mysql_deparse_from_expr_for_rel(buf, root, foreignrel, true, ignore_rel,
-							  			ignore_conds, params_list);
+										ignore_conds, params_list);
 }
 
 /*
@@ -3329,9 +5224,9 @@ mysql_append_conditions(List *exprs, deparse_expr_cxt *context)
  */
 void
 mysql_deparse_select_stmt_for_rel(StringInfo buf, PlannerInfo *root, RelOptInfo *rel,
-								List *tlist, List *remote_conds, List *pathkeys,
-								bool has_final_sort, bool has_limit, bool is_subquery,
-								List **retrieved_attrs, List **params_list)
+								  List *tlist, List *remote_conds, List *pathkeys,
+								  bool has_final_sort, bool has_limit, bool is_subquery,
+								  List **retrieved_attrs, List **params_list)
 {
 	deparse_expr_cxt context;
 	MySQLFdwRelationInfo *fpinfo = (MySQLFdwRelationInfo *) rel->fdw_private;
@@ -3350,6 +5245,12 @@ mysql_deparse_select_stmt_for_rel(StringInfo buf, PlannerInfo *root, RelOptInfo 
 	context.scanrel = IS_UPPER_REL(rel) ? fpinfo->outerrel : rel;
 	context.params_list = params_list;
 	context.can_convert_time = false;
+	context.is_not_distinct_op = false;
+	context.is_not_add_array = false;
+	context.can_convert_unit_arg = false;
+	context.can_skip_cast = false;
+	context.json_table_expr = NULL;
+	context.can_skip_convert_unit_arg = false;
 
 	/* Construct SELECT clause */
 	mysql_deparse_select_sql(tlist, is_subquery, retrieved_attrs, &context);
@@ -3412,7 +5313,7 @@ mysql_deparse_select_stmt_for_rel(StringInfo buf, PlannerInfo *root, RelOptInfo 
  */
 static void
 mysql_deparse_select_sql(List *tlist, bool is_subquery, List **retrieved_attrs,
-				 deparse_expr_cxt *context)
+						 deparse_expr_cxt *context)
 {
 	StringInfo	buf = context->buf;
 	RelOptInfo *foreignrel = context->foreignrel;
@@ -3454,20 +5355,21 @@ mysql_deparse_select_sql(List *tlist, bool is_subquery, List **retrieved_attrs,
 		 * can use NoLock here.
 		 */
 		Relation	rel;
+
 		rel = table_open(rte->relid, NoLock);
 
 		if (tlist != NULL)
 		{
-			ListCell *cell;
-			int i = 0;
-			bool first;
+			ListCell   *cell;
+			int			i = 0;
+			bool		first;
 
 			first = true;
 			*retrieved_attrs = NIL;
-			
-			foreach (cell, tlist)
+
+			foreach(cell, tlist)
 			{
-				Expr *expr = ((TargetEntry *)lfirst(cell))->expr;
+				Expr	   *expr = ((TargetEntry *) lfirst(cell))->expr;
 
 				if (!first)
 					appendStringInfoString(buf, ", ");
@@ -3482,7 +5384,7 @@ mysql_deparse_select_sql(List *tlist, bool is_subquery, List **retrieved_attrs,
 		else
 		{
 			mysql_deparse_target_list(buf, rte, foreignrel->relid, rel,
-								fpinfo->attrs_used, false, retrieved_attrs, false);
+									  fpinfo->attrs_used, false, retrieved_attrs);
 		}
 
 		table_close(rel, NoLock);
@@ -3537,7 +5439,7 @@ mysql_build_tlist_to_deparse(RelOptInfo *foreignrel)
  */
 static void
 mysql_append_order_by_clause(List *pathkeys, bool has_final_sort,
-					deparse_expr_cxt *context)
+							 deparse_expr_cxt *context)
 {
 	ListCell   *lcell;
 	char	   *delim = " ";
@@ -3559,8 +5461,8 @@ mysql_append_order_by_clause(List *pathkeys, bool has_final_sort,
 			 * the final sort.
 			 */
 			em_expr = mysql_find_em_expr_for_input_target(context->root,
-													pathkey->pk_eclass,
-													context->foreignrel->reltarget);
+														  pathkey->pk_eclass,
+														  context->foreignrel->reltarget);
 		}
 		else
 			em_expr = mysql_find_em_expr_for_rel(pathkey->pk_eclass, baserel);
@@ -3573,9 +5475,9 @@ mysql_append_order_by_clause(List *pathkeys, bool has_final_sort,
 		delim = ", ";
 
 		if (pathkey->pk_nulls_first)
-			appendStringInfoString(buf, " IS NULL DESC"); /* NULLS FIRST */
+			appendStringInfoString(buf, " IS NULL DESC");	/* NULLS FIRST */
 		else
-			appendStringInfoString(buf, " IS NULL ASC"); /* NULLS LAST */
+			appendStringInfoString(buf, " IS NULL ASC");	/* NULLS LAST */
 
 		appendStringInfoString(buf, delim);
 		deparseExpr(em_expr, context);
@@ -3616,8 +5518,8 @@ mysql_append_limit_clause(deparse_expr_cxt *context)
  */
 Expr *
 mysql_find_em_expr_for_input_target(PlannerInfo *root,
-							  EquivalenceClass *ec,
-							  PathTarget *target)
+									EquivalenceClass *ec,
+									PathTarget *target)
 {
 	ListCell   *lc1;
 	int			i;
@@ -3742,7 +5644,7 @@ mysql_is_subquery_var(Var *node, RelOptInfo *foreignrel, int *relno, int *colno)
  */
 static void
 mysql_get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
-									 int *relno, int *colno)
+									int *relno, int *colno)
 {
 	MySQLFdwRelationInfo *fpinfo = (MySQLFdwRelationInfo *) foreignrel->fdw_private;
 	int			i;
@@ -3775,7 +5677,7 @@ mysql_get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
  */
 static Node *
 mysql_deparse_sort_group_clause(Index ref, List *tlist, bool force_colno,
-					   deparse_expr_cxt *context)
+								deparse_expr_cxt *context)
 {
 	StringInfo	buf = context->buf;
 	TargetEntry *tle;
@@ -3854,70 +5756,203 @@ static void
 mysql_append_function_name(Oid funcid, deparse_expr_cxt *context)
 {
 	StringInfo	buf = context->buf;
-	HeapTuple	proctup;
-	Form_pg_proc procform;
-	const char *proname;
-
-	proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
-	if (!HeapTupleIsValid(proctup))
-		elog(ERROR, "cache lookup failed for function %u", funcid);
-	procform = (Form_pg_proc) GETSTRUCT(proctup);
-
-	/* Print schema name only if it's not pg_catalog */
-	if (procform->pronamespace != PG_CATALOG_NAMESPACE)
-	{
-		const char *schemaname;
-
-		schemaname = get_namespace_name(procform->pronamespace);
-		appendStringInfo(buf, "%s.", quote_identifier(schemaname));
-	}
+	char	   *proname;
 
 	/* Always print the function name */
-	proname = NameStr(procform->proname);
+	proname = get_func_name(funcid);
+	proname = mysql_replace_function(proname, NIL);
 
-	if (strcmp(proname, "json_agg") == 0)
-		appendStringInfoString(buf, quote_identifier("json_arrayagg"));
-	else if (strcmp(proname, "json_object_agg") == 0)
-		appendStringInfoString(buf, quote_identifier("json_objectagg"));
-	else
-		appendStringInfoString(buf, quote_identifier(proname));
-
-	ReleaseSysCache(proctup);
+	appendStringInfoString(buf, quote_identifier(proname));
 }
 
 /*
- * Convert time interval to second
+ * Append time units without apostrophes
  */
-static void 
-interval2sec(Datum datum, uint64 *second, int32 *microsecond)
+static void
+mysql_append_time_unit(Const *node, deparse_expr_cxt *context)
+{
+	StringInfo	buf = context->buf;
+	char	   *extval;
+	const char *valptr;
+	Oid			typoutput;
+	bool		typIsVarlena;
+
+	if (nodeTag(node) != T_Const)
+		elog(ERROR, "mysql_fdw: Node must be const type");
+
+	getTypeOutputInfo(node->consttype, &typoutput, &typIsVarlena);
+	extval = OidOutputFunctionCall(typoutput, node->constvalue);
+	for (valptr = extval; *valptr; valptr++)
+	{
+		char		ch = *valptr;
+
+		if (SQL_STR_DOUBLE(ch, true))
+			appendStringInfoChar(buf, ch);
+		appendStringInfoChar(buf, ch);
+	}
+}
+
+/*
+ * Return true if function name existed in list of function
+ */
+static bool
+exist_in_function_list(char *funcname, const char **funclist)
+{
+	int			i;
+
+	for (i = 0; funclist[i]; i++)
+	{
+		if (strcmp(funcname, funclist[i]) == 0)
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Return true if function is Mysql unique function
+ */
+static bool
+mysql_is_unique_func(Oid funcid, char *in)
+{
+	if (mysql_is_builtin(funcid))
+		return false;
+
+	if (exist_in_function_list(in, MysqlUniqueNumericFunction) ||
+		exist_in_function_list(in, MysqlUniqueDateTimeFunction) ||
+		exist_in_function_list(in, MysqlUniqueStringFunction) ||
+		exist_in_function_list(in, MysqlUniqueJsonFunction) ||
+		exist_in_function_list(in, MysqlUniqueCastFunction))
+		return true;
+
+	return false;
+}
+
+/*
+ * Return true if function is builtin function can pushdown to Mysql
+ */
+static bool
+mysql_is_supported_builtin_func(Oid funcid, char *in)
+{
+	if (!mysql_is_builtin(funcid))
+		return false;
+
+	if (exist_in_function_list(in, MysqlSupportedBuiltinNumericFunction) ||
+		exist_in_function_list(in, MysqlSupportedBuiltinDateTimeFunction) ||
+		exist_in_function_list(in, MysqlSupportedBuiltinStringFunction) ||
+		exist_in_function_list(in, MysqlSupportedBuiltinJsonFunction))
+		return true;
+
+	return false;
+}
+
+/*
+ * Return true if the string (*str) have prefix (*pre)
+ */
+static bool
+starts_with(const char *pre, const char *str)
+{
+	size_t		lenpre = strlen(pre);
+	size_t		lenstr = strlen(str);
+
+	return lenstr < lenpre ? false : strncmp(pre, str, lenpre) == 0;
+}
+
+/*
+ * Convert PostgreSQL interval to Mysql interval
+ * If unit is NULL, automatically detect UNIT and convert interval to that UNIT
+ * If UNIT is given, the function converts interval to specified UNIT
+ * Currently, we just support specified UNIT: SECOND_MICROSECOND
+ * https://dev.mysql.com/doc/refman/8.0/en/expressions.html#temporal-intervals
+ */
+static void
+interval2unit(Datum datum, char **expr, char **unit)
 {
 	struct pg_tm tm;
-	fsec_t fsec;
-	uint64 sec = 0;
+	fsec_t		fsec;
 
 	if (interval2tm(*DatumGetIntervalP(datum), &tm, &fsec) != 0)
-		elog(ERROR, "could not convert interval to tm");
+		elog(ERROR, "mysql_fdw: could not convert interval to tm");
 
-	if (tm.tm_year > 0)
-		sec += tm.tm_year * SECS_PER_YEAR;
+	if (*unit == NULL)
+	{
+		if (fsec != 0 ||
+			tm.tm_sec != 0 ||
+			tm.tm_min != 0 ||
+			tm.tm_hour != 0 ||
+			tm.tm_mday != 0)
+		{
+			int			mday = tm.tm_year * DAYS_PER_YEAR + tm.tm_mon * DAYS_PER_MONTH + tm.tm_mday;
 
-	if (tm.tm_mon > 0)
-		sec += tm.tm_mon * DAYS_PER_MONTH * SECS_PER_DAY;
+			/* DAYS HOURS:MINUTES:SECONDS.MICROSECONDS */
+			*expr = psprintf("%d %d:%d:%d.%d", mday, tm.tm_hour, tm.tm_min, tm.tm_sec, fsec);
+			*unit = "DAY_MICROSECOND";
+		}
+		else if (tm.tm_mon != 0)
+		{
+			/* YEAR and MONTH */
+			*expr = psprintf("%d-%d", tm.tm_year, tm.tm_mon);
+			*unit = "YEAR_MONTH";
+		}
+		else
+		{
+			/* Only YEAR */
+			*expr = psprintf("%d", tm.tm_year);
+			*unit = "YEAR";
+		}
+	}
+	else if (strcmp(*unit, "SECOND_MICROSECOND") == 0)
+	{
+		uint64		sec = 0;
+		int32		microsecond = 0;
 
-	if (tm.tm_mday > 0)
-		sec += tm.tm_mday * SECS_PER_DAY;
+		sec = tm.tm_year * SECS_PER_YEAR +
+			tm.tm_mon * DAYS_PER_MONTH * SECS_PER_DAY +
+			tm.tm_mday * SECS_PER_DAY +
+			tm.tm_hour * SECS_PER_HOUR +
+			tm.tm_min * SECS_PER_MINUTE +
+			tm.tm_sec;
 
-	if (tm.tm_hour > 0)
-		sec += tm.tm_hour * SECS_PER_HOUR;
+		if (fsec > 0)
+			microsecond = fsec;
 
-	if (tm.tm_min > 0)
-		sec += tm.tm_min * SECS_PER_MINUTE;
+		*expr = psprintf("%lu.%d", sec, microsecond);
+	}
+}
 
-	if (tm.tm_sec > 0)
-		sec += tm.tm_sec;
+/*
+ * Convert type OID + typmod info into a type name we can ship to the remote
+ * server.  Someplace else had better have verified that this type name is
+ * expected to be known on the remote end.
+ *
+ * This is almost just format_type_with_typemod(), except that if left to its
+ * own devices, that function will make schema-qualification decisions based
+ * on the local search_path, which is wrong.  We must schema-qualify all
+ * type names that are not in pg_catalog.  We assume here that built-in types
+ * are all in pg_catalog and need not be qualified; otherwise, qualify.
+ */
+static char *
+mysql_deparse_type_name(Oid type_oid, int32 typemod)
+{
+	bits16		flags = FORMAT_TYPE_TYPEMOD_GIVEN;
 
-	if (fsec > 0)
-		*microsecond = fsec;
-	
-	*second = sec;
+	if (!mysql_is_builtin(type_oid))
+		flags |= FORMAT_TYPE_FORCE_QUALIFY;
+
+	return format_type_extended(type_oid, typemod, flags);
+}
+
+static void
+mysql_deconstruct_constant_array(Const *node, bool **elem_nulls, Datum **elem_values, Oid *elmtype, int *num_elems)
+{
+	ArrayType  *array;
+	int16		elmlen;
+	bool		elmbyval;
+	char		elmalign;
+
+	array = DatumGetArrayTypeP(node->constvalue);
+	*elmtype = ARR_ELEMTYPE(array);
+
+	get_typlenbyvalalign(*elmtype, &elmlen, &elmbyval, &elmalign);
+	deconstruct_array(array, *elmtype, elmlen, elmbyval, elmalign,
+					  elem_values, elem_nulls, num_elems);
 }

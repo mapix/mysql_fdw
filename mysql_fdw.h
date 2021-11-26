@@ -4,7 +4,7 @@
  * 		Foreign-data wrapper for remote MySQL servers
  *
  * Portions Copyright (c) 2012-2014, PostgreSQL Global Development Group
- * Portions Copyright (c) 2004-2020, EnterpriseDB Corporation.
+ * Portions Copyright (c) 2004-2021, EnterpriseDB Corporation.
  *
  * IDENTIFICATION
  * 		mysql_fdw.h
@@ -27,6 +27,7 @@
 #include "access/tupdesc.h"
 #include "fmgr.h"
 #include "foreign/foreign.h"
+#include "funcapi.h"
 #include "lib/stringinfo.h"
 #include "optimizer/paths.h"
 #if PG_VERSION_NUM < 120000
@@ -36,10 +37,11 @@
 #endif
 #include "utils/rel.h"
 #include "utils/float.h"
+#include "catalog/pg_proc.h"
 
 #define MYSQL_PREFETCH_ROWS	100
 #define MYSQL_BLKSIZ		(1024 * 4)
-#define MYSQL_PORT			3306
+#define MYSQL_DEFAULT_SERVER_PORT	3306
 #define MAXDATALEN			1024 * 64
 
 #define WAIT_TIMEOUT		0
@@ -155,7 +157,7 @@ typedef struct MySQLFdwRelationInfo
 	 * indicates which base foreign tables are included and the join type or
 	 * aggregation type used.
 	 */
-	char	   *relation_name;
+	StringInfo	relation_name;
 
 	/* Join information */
 	RelOptInfo *outerrel;
@@ -186,7 +188,7 @@ typedef struct MySQLFdwRelationInfo
 
 	/* Function pushdown surppot in target list */
 	bool		is_tlist_func_pushdown;
-} MySQLFdwRelationInfo;
+}			MySQLFdwRelationInfo;
 
 /*
  * Options structure to store the MySQL
@@ -207,7 +209,7 @@ typedef struct mysql_opt
 									 * truncation */
 	bool		use_remote_estimate;	/* use remote estimate for rows */
 
-	char		*column_name;	/* use column name option */
+	char	   *column_name;	/* use column name option */
 
 	/* SSL parameters; unused options may be given as NULL */
 	char	   *ssl_key;		/* MySQL SSL: path to the key file */
@@ -219,7 +221,7 @@ typedef struct mysql_opt
 								 * format */
 	char	   *ssl_cipher;		/* MySQL SSL: list of permissible ciphers to
 								 * use for SSL encryption */
-} mysql_opt;
+}			mysql_opt;
 
 typedef struct mysql_column
 {
@@ -228,7 +230,7 @@ typedef struct mysql_column
 	bool		is_null;
 	bool		error;
 	MYSQL_BIND *mysql_bind;
-} mysql_column;
+}			mysql_column;
 
 typedef struct mysql_table
 {
@@ -236,7 +238,30 @@ typedef struct mysql_table
 	MYSQL_FIELD *mysql_fields;
 	mysql_column *column;
 	MYSQL_BIND *mysql_bind;
-} mysql_table;
+}			mysql_table;
+
+typedef struct
+{
+	/*
+	 * Tuple descriptor for whole-row reference. We can not use the base
+	 * relation's tuple descriptor as it is, since it might have information
+	 * about dropped attributes.
+	 */
+	TupleDesc	tupdesc;
+
+	/*
+	 * Positions of the required attributes in the tuple fetched from the
+	 * foreign server.
+	 */
+	int		   *attr_pos;
+
+	/* Position of attribute indicating NULL-ness of whole-row reference */
+	int			wr_null_ind_pos;
+
+	/* Values and null array for holding column values. */
+	Datum	   *values;
+	bool	   *nulls;
+}			MySQLWRState;
 
 /*
  * FDW-specific information for ForeignScanState
@@ -250,7 +275,7 @@ typedef struct MySQLFdwExecState
 	char	   *query;			/* Query string */
 	Relation	rel;			/* relcache entry for the foreign table */
 	List	   *retrieved_attrs;	/* list of target attribute numbers */
-	bool		query_executed;	/* have we executed the query? */
+	bool		query_executed; /* have we executed the query? */
 	int			numParams;		/* number of parameters passed to query */
 	FmgrInfo   *param_flinfo;	/* output conversion functions for them */
 	List	   *param_exprs;	/* executable expressions for param values */
@@ -261,13 +286,45 @@ typedef struct MySQLFdwExecState
 
 	mysql_opt  *mysqlFdwOptions;	/* MySQL FDW options */
 
-	List	   *attr_list;		/* query attribute list */
-	List	   *column_list;	/* Column list of MySQL Column structures */
-	bool 	    is_tlist_pushdown;      /* pushdown target list or not */
+	bool		is_tlist_pushdown;	/* pushdown target list or not */
 	/* working memory context */
 	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
-	MYSQL_RES 	*metadata;
-} MySQLFdwExecState;
+
+	AttInMetadata *attinmeta;
+	AttrNumber	rowidAttno;		/* attnum of resjunk rowid column */
+	MYSQL_RES  *metadata;
+
+	/* for update row movement if subplan result rel */
+	struct MySQLFdwExecState *aux_fmstate;	/* foreign-insert state, if
+											 * created */
+
+	/*
+	 * Members used for constructing the ForeignScan result row when whole-row
+	 * references are involved in a pushed down join.
+	 */
+	MySQLWRState **mysqlwrstates;	/* whole-row construction information for
+									 * each base relation involved in the
+									 * pushed down join. */
+	int		   *wr_attrs_pos;	/* Array mapping the attributes in the
+								 * ForeignScan result to those in the rows
+								 * fetched from the foreign server.  The array
+								 * is indexed by the attribute numbers in the
+								 * ForeignScan. */
+	TupleDesc	wr_tupdesc;		/* Tuple descriptor describing the result of
+								 * ForeignScan node.  Should be same as that
+								 * in ForeignScanState::ss::ss_ScanTupleSlot */
+	/* Array for holding column values. */
+	Datum	   *wr_values;
+	bool	   *wr_nulls;
+#if (PG_VERSION_NUM >= 140000)
+	char	   *orig_query;		/* original text of INSERT command */
+	int			values_end;		/* length up to the end of VALUES */
+	int			batch_size;		/* value of FDW option "batch_size" */
+	/* batch operation stuff */
+	int			num_slots;		/* number of slots to insert */
+#endif
+}			MySQLFdwExecState;
+
 
 /*
  * Execution state of a foreign scan that modifies a foreign table directly.
@@ -299,6 +356,13 @@ typedef struct MySQLFdwDirectModifyState
 
 	/* working memory context */
 	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
+#if (PG_VERSION_NUM >= 140000)
+	char	   *orig_query;		/* original text of INSERT command */
+	int			values_end;		/* length up to the end of VALUES */
+	int			batch_size;		/* value of FDW option "batch_size" */
+	/* batch operation stuff */
+	int			num_slots;		/* number of slots to insert */
+#endif
 }			MySQLFdwDirectModifyState;
 
 
@@ -309,130 +373,141 @@ typedef struct MySQLColumn
 	int			attnum;			/* Attribute number */
 	char	   *attname;		/* Attribute name */
 	int			atttype;		/* Attribute type */
-} MySQLColumn;
-
+}			MySQLColumn;
 
 extern bool mysql_is_foreign_function_tlist(PlannerInfo *root,
 											RelOptInfo *baserel,
 											List *tlist);
-extern int ((mysql_options) (MYSQL *mysql, enum mysql_option option,
-							 const void *arg));
-extern int ((mysql_stmt_prepare) (MYSQL_STMT *stmt, const char *query,
-								  unsigned long length));
-extern int ((mysql_stmt_execute) (MYSQL_STMT *stmt));
-extern int ((mysql_stmt_fetch) (MYSQL_STMT *stmt));
-extern int ((mysql_query) (MYSQL *mysql, const char *q));
-extern bool ((mysql_stmt_attr_set) (MYSQL_STMT *stmt,
+extern int	((mysql_options) (MYSQL * mysql, enum mysql_option option,
+							  const void *arg));
+extern int	((mysql_stmt_prepare) (MYSQL_STMT * stmt, const char *query,
+								   unsigned long length));
+extern int	((mysql_stmt_execute) (MYSQL_STMT * stmt));
+extern int	((mysql_stmt_fetch) (MYSQL_STMT * stmt));
+extern int	((mysql_query) (MYSQL * mysql, const char *q));
+extern bool ((mysql_stmt_attr_set) (MYSQL_STMT * stmt,
 									enum enum_stmt_attr_type attr_type,
 									const void *attr));
-extern bool ((mysql_stmt_close) (MYSQL_STMT *stmt));
-extern bool ((mysql_stmt_reset) (MYSQL_STMT *stmt));
-extern bool ((mysql_free_result) (MYSQL_RES *result));
-extern bool ((mysql_stmt_bind_param) (MYSQL_STMT *stmt, MYSQL_BIND *bnd));
-extern bool ((mysql_stmt_bind_result) (MYSQL_STMT *stmt, MYSQL_BIND *bnd));
+extern bool ((mysql_stmt_close) (MYSQL_STMT * stmt));
+extern bool ((mysql_stmt_reset) (MYSQL_STMT * stmt));
+extern bool ((mysql_free_result) (MYSQL_RES * result));
+extern bool ((mysql_stmt_bind_param) (MYSQL_STMT * stmt, MYSQL_BIND * bnd));
+extern bool ((mysql_stmt_bind_result) (MYSQL_STMT * stmt, MYSQL_BIND * bnd));
 
-extern MYSQL_STMT *((mysql_stmt_init) (MYSQL *mysql));
-extern MYSQL_RES *((mysql_stmt_result_metadata) (MYSQL_STMT *stmt));
-extern int ((mysql_stmt_store_result) (MYSQL *mysql));
-extern MYSQL_ROW((mysql_fetch_row) (MYSQL_RES *result));
-extern MYSQL_FIELD *((mysql_fetch_field) (MYSQL_RES *result));
-extern MYSQL_FIELD *((mysql_fetch_fields) (MYSQL_RES *result));
-extern const char *((mysql_error) (MYSQL *mysql));
-extern void ((mysql_close) (MYSQL *sock));
-extern MYSQL_RES *((mysql_store_result) (MYSQL *mysql));
-extern MYSQL *((mysql_init) (MYSQL *mysql));
-extern bool ((mysql_ssl_set) (MYSQL *mysql, const char *key, const char *cert,
+extern MYSQL_STMT * ((mysql_stmt_init) (MYSQL * mysql));
+extern MYSQL_RES * ((mysql_stmt_result_metadata) (MYSQL_STMT * stmt));
+extern int	((mysql_stmt_store_result) (MYSQL * mysql));
+extern MYSQL_ROW((mysql_fetch_row) (MYSQL_RES * result));
+extern MYSQL_FIELD * ((mysql_fetch_field) (MYSQL_RES * result));
+extern MYSQL_FIELD * ((mysql_fetch_fields) (MYSQL_RES * result));
+extern const char *((mysql_error) (MYSQL * mysql));
+extern void ((mysql_close) (MYSQL * sock));
+extern MYSQL_RES * ((mysql_store_result) (MYSQL * mysql));
+extern MYSQL * ((mysql_init) (MYSQL * mysql));
+extern bool ((mysql_ssl_set) (MYSQL * mysql, const char *key, const char *cert,
 							  const char *ca, const char *capath,
 							  const char *cipher));
-extern MYSQL *((mysql_real_connect) (MYSQL *mysql, const char *host,
-									 const char *user, const char *passwd,
-									 const char *db, unsigned int port,
-									 const char *unix_socket,
-									 unsigned long clientflag));
+extern MYSQL * ((mysql_real_connect) (MYSQL * mysql, const char *host,
+									  const char *user, const char *passwd,
+									  const char *db, unsigned int port,
+									  const char *unix_socket,
+									  unsigned long clientflag));
 
-extern const char *((mysql_get_host_info) (MYSQL *mysql));
-extern const char *((mysql_get_server_info) (MYSQL *mysql));
-extern int ((mysql_get_proto_info) (MYSQL *mysql));
+extern const char *((mysql_get_host_info) (MYSQL * mysql));
+extern const char *((mysql_get_server_info) (MYSQL * mysql));
+extern int	((mysql_get_proto_info) (MYSQL * mysql));
 
-extern unsigned int ((mysql_stmt_errno) (MYSQL_STMT *stmt));
-extern unsigned int ((mysql_errno) (MYSQL *mysql));
-extern unsigned int ((mysql_num_fields) (MYSQL_RES *result));
-extern unsigned int ((mysql_num_rows) (MYSQL_RES *result));
-extern unsigned int ((mysql_warning_count)(MYSQL *mysql));
-extern uint64_t ((mysql_stmt_affected_rows)(MYSQL_STMT *stmt));
+extern unsigned int ((mysql_stmt_errno) (MYSQL_STMT * stmt));
+extern unsigned int ((mysql_errno) (MYSQL * mysql));
+extern unsigned int ((mysql_num_fields) (MYSQL_RES * result));
+extern unsigned int ((mysql_num_rows) (MYSQL_RES * result));
+extern unsigned int ((mysql_warning_count) (MYSQL * mysql));
+extern uint64_t ((mysql_stmt_affected_rows) (MYSQL_STMT * stmt));
 
 void		mysql_reset_transmission_modes(int nestlevel);
 int			mysql_set_transmission_modes(void);
 
 /* option.c headers */
 extern bool mysql_is_valid_option(const char *option, Oid context);
-extern mysql_opt *mysql_get_options(Oid foreigntableid);
+extern mysql_opt * mysql_get_options(Oid foreigntableid, bool is_foreigntable);
 
 /* depare.c headers */
 extern void mysql_deparse_select(StringInfo buf, PlannerInfo *root,
 								 RelOptInfo *baserel, Bitmapset *attrs_used,
 								 char *svr_table, List **retrieved_attrs, List *tlist);
-extern void mysql_deparse_insert(StringInfo buf, PlannerInfo *root,
+#if (PG_VERSION_NUM >= 140000)
+extern void mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte,
 								 Index rtindex, Relation rel,
-								 List *targetAttrs);
+								 List *targetAttrs, bool doNothing,
+								 int *values_end_len);
+#else
+extern void mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte,
+								 Index rtindex, Relation rel,
+								 List *targetAttrs, bool doNothing);
+#endif
 extern void mysql_deparse_update(StringInfo buf, PlannerInfo *root,
 								 Index rtindex, Relation rel,
 								 List *targetAttrs, char *attname);
+extern void mysql_rebuild_insert_sql(StringInfo buf, char *orig_query,
+									 int values_end_len, int num_cols,
+									 int num_rows);
 extern void mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
-												Index rtindex, Relation rel,
-												RelOptInfo *foreignrel,
-												List *targetlist,
-												List *targetAttrs,
-												List *remote_conds,
-												List **params_list,
-												List **retrieved_attrs);
+											Index rtindex, Relation rel,
+											RelOptInfo *foreignrel,
+											List *targetlist,
+											List *targetAttrs,
+											List *remote_conds,
+											List **params_list,
+											List **retrieved_attrs);
 
 extern void mysql_deparse_delete(StringInfo buf, PlannerInfo *root,
 								 Index rtindex, Relation rel, char *name);
 extern void mysql_deparse_direct_delete_sql(StringInfo buf, PlannerInfo *root,
-												Index rtindex, Relation rel,
-												RelOptInfo *foreignrel,
-												List *remote_conds,
-												List **params_list,
-												List **retrieved_attrs);								 
+											Index rtindex, Relation rel,
+											RelOptInfo *foreignrel,
+											List *remote_conds,
+											List **params_list,
+											List **retrieved_attrs);
 extern void mysql_append_where_clause(StringInfo buf, PlannerInfo *root,
 									  RelOptInfo *baserel, List *exprs,
 									  bool is_first, List **params);
 extern void mysql_deparse_analyze(StringInfo buf, char *dbname, char *relname);
+#if (PG_VERSION_NUM >= 140000)
+extern void mysql_deparse_truncate_sql(StringInfo buf,
+									   List *rels);
+#endif
 extern void mysql_deparse_select_stmt_for_rel(StringInfo buf, PlannerInfo *root,
-											RelOptInfo *foreignrel, List *tlist,
-											List *remote_conds, List *pathkeys,
-											bool has_final_sort, bool has_limit,
-											bool is_subquery,
-											List **retrieved_attrs, List **params_list);
+											  RelOptInfo *foreignrel, List *tlist,
+											  List *remote_conds, List *pathkeys,
+											  bool has_final_sort, bool has_limit,
+											  bool is_subquery,
+											  List **retrieved_attrs, List **params_list);
 extern bool mysql_is_foreign_expr(PlannerInfo *root, RelOptInfo *baserel,
 								  Expr *expr);
 extern bool mysql_is_foreign_param(PlannerInfo *root,
-							 RelOptInfo *baserel,
-							 Expr *expr);
+								   RelOptInfo *baserel,
+								   Expr *expr);
 extern const char *mysql_get_jointype_name(JoinType jointype);
 extern void mysql_classify_conditions(PlannerInfo *root,
-							   RelOptInfo *baserel,
-							   List *input_conds,
-							   List **remote_conds,
-							   List **local_conds);
+									  RelOptInfo *baserel,
+									  List *input_conds,
+									  List **remote_conds,
+									  List **local_conds);
 extern Expr *mysql_find_em_expr_for_input_target(PlannerInfo *root,
-										   EquivalenceClass *ec,
-										   PathTarget *target);
+												 EquivalenceClass *ec,
+												 PathTarget *target);
 extern List *mysql_build_tlist_to_deparse(RelOptInfo *foreignrel);
 
-#if PG_VERSION_NUM < 130000
 extern Expr *mysql_find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel);
-#else
-#define mysql_find_em_expr_for_rel find_em_expr_for_rel
-#endif
+extern bool mysql_is_builtin(Oid oid);
+extern List *mysql_pull_func_clause(Node *node);
 
 /* connection.c headers */
-MYSQL *mysql_get_connection(ForeignServer *server, UserMapping *user,
-							mysql_opt *opt);
-MYSQL *mysql_connect(mysql_opt *opt);
-void mysql_cleanup_connection(void);
-void mysql_release_connection(MYSQL *conn);
+MYSQL	   *mysql_get_connection(ForeignServer *server, UserMapping *user,
+								 mysql_opt * opt);
+MYSQL	   *mysql_connect(mysql_opt * opt);
+void		mysql_cleanup_connection(void);
+void		mysql_release_connection(MYSQL * conn);
 extern char *mysql_quote_identifier(const char *str, char quotechar);
 
 #if PG_VERSION_NUM < 110000		/* TupleDescAttr is defined from PG version 11 */
@@ -442,6 +517,7 @@ extern char *mysql_quote_identifier(const char *str, char quotechar);
 #if (PG_VERSION_NUM < 120000)
 #define table_close(rel, lock)	heap_close(rel, lock)
 #define table_open(rel, lock)	heap_open(rel, lock)
+#define exec_rt_fetch(rtindex, estate)	rt_fetch(rtindex, estate->es_range_table)
 #endif
 
 #endif							/* MYSQL_FDW_H */

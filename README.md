@@ -5,7 +5,7 @@ This PostgreSQL extension implements a Foreign Data Wrapper (FDW) for
 [MySQL][1].
 
 Please note that this version of mysql_fdw works with PostgreSQL and EDB
-Postgres Advanced Server 9.5, 9.6, 10, 11, 12, and 13.
+Postgres Advanced Server 12, 13 and 14.
 
 Installation
 ------------
@@ -42,14 +42,22 @@ website][1].
     $ make USE_PGXS=1 install
     ```
 
+5. Running regression test.
+    ```
+    $ test.sh
+    ```
+   However, make sure to set the `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER_NAME`,
+   and `MYSQL_PWD` environment variables correctly. The default settings
+   can be found in the configuration file "sql/parameter.conf"
+
+
 If you run into any issues, please [let us know][2].
 
 
 Enhancements
 ------------
 
-The following enhancements are added to the latest version of
-`mysql_fdw`:
+The following enhancements are added to the latest version of `mysql_fdw`:
 
 ### Write-able FDW
 The previous version was only read-only, the latest version provides the
@@ -78,22 +86,128 @@ a performance feature.
 
 ### GROUP BY, HAVING clause push-down
 The group by, having clause will be pushed-down to the foreign server that reduce the row and column to bring across to PostgreSQL.
+
 ### LIMIT OFFSET clause push-down
 The limit offset clause will be pushed-down to the foreign server that will enhance performance.
+
 ### Aggregation function push-down
 List of aggregate functions push-down:
 ```
-avg, bit_and, bit_or, count, json_agg, json_object_agg, max, min, stddev, stddev_pop, stddev_samp, sum, var_pop, var_samp, variance.
+avg, bit_and, bit_or, count, json_agg, json_object_agg, max, min, stddev,
+stddev_pop, stddev_samp, sum, var_pop, var_samp, variance.
 ```
+
+Some function has different specification or different function signature have to be implemented by stub function. The conversion syntax between Postgres and Mysql is described in the table below.
+
+| Postgres syntax   |      Mysql coressponding syntax      |  Remark |
+|----------|:-------------|------|
+|bit_xor|bit_xor|Different in return value between Mysql and Postgres|
+|group_concat|group_concat|unique function of Mysql|
+|json_agg|json_arrayagg|Different signature but same functionality|
+|json_object_agg|json_objectagg|Different signature but same functionality|
+|std|std|unique function of Mysqlsql|
+
+The special syntax for multiple arguments using Postgres ROW() syntax.
+
+| Postgres syntax   |      Mysql coressponding syntax      |  Remark |
+|----------|:-------------|------|
+| count(DISTINCT (col1, col2))| count(DISTINCT col1, col2)|Deparse "ROW(col1,col2)" to "col1, col2"|
+| group_concat(DISTINCT (col1, col2))| group_concat(DISTINCT col1, col2)|Deparse "ROW(col1,col2)" to "col1, col2"|
+
+### Function push-down
+The function can be push-down in WHERE, GROUP BY, HAVING, clauses.   
+List of builtin functions of PostgreSQL push-down:
+```
+abs, acos, asin, atan, atan2, ceil, ceiling, cos, cot, degrees, div, exp, floor,
+ln, log, log10, mod, pow, power, radians, round, sign, sin, sqrt, tan.
+ascii, bit_length, char_length, character_length, concat, concat_ws, left,
+length, lower, lpad, ltrim, octet_length, repeat, replace, reverse, right,
+rpad, rtrim, position, regexp_replace, substr, substring, trim, upper.
+date.
+json_build_array, json_build_object.
+```
+List of unique functions of MySQL push-down:
+
+Numeric:
+```
+conv, crc32, div, log2, rand, truncate.
+```
+
+String:
+```
+bin, char, elt, export_set, field, find_in_set, format, from_base64, hex, insert,
+instr, lcase,locate, make_set, mid, oct, ord, quote, regexp_instr, regexp_like,
+regexp_replace, regexp_substr,space, strcmp, substring_index, to_base64, ucase,
+unhex, weight_string.
+```
+Json:
+```
+"json_array_append", "json_array_insert", "json_contains", "json_contains_path",
+"json_depth", "json_extract", "json_insert", "json_keys", "json_length", "json_merge",
+"json_merge_patch", "json_merge_preserve", "json_overlaps", "json_pretty", "json_quote",
+"json_remove", "json_replace", "json_schema_valid", "json_schema_validation_report",
+"json_search", "json_set", "json_storage_free", "json_storage_size", "json_table",
+"json_type", "json_unquote", "json_valid", "json_value", "member_of".
+```
+
+Cast:
+```
+convert.
+```
+List of unique functions of Mysql with different name and syntax:   
+  - MATCH ... AGAINST ...: `match_against`   
+  Example: SELECT content FROM contents WHERE match_against(content, 'search_keyword','in boolean mode') != 0;
+  - Prefix name with `mysql_`:   
+  User needs to append prefix with `mysql_` for function name: pi, char, now, current_date, current_time, current_timestamp, extract, localtime, localtimestamp, time, timestamp.   
+  Example: pi() -> mysql_pi()
+  - WEIGHT_STRING(str [AS {CHAR|BINARY} (N)]):   
+  Example: SELECT str1 FROM s3 WHERE weight_string(str1, 'CHAR', 3) > 0 AND weight_string(str1, 'BINARY', 5) > 1;
+  - MEMBER ... OF ...: `member_of`    
+  Example: SELECT c1 FROM ftbl WHERE member_of(5, c1) = 1;
+  - json_array: `json_build_array`    
+  Example: SELECT c1 FROM ftbl WHERE member_of(c1, json_build_array('text', 10, mysql_pi())) = 1;
+  - json_object: `json_build_object`    
+  Example: SELECT c1 FROM ftbl WHERE member_of(c1, json_build_object('a', c2, 'b', 10, 'c', mysql_pi())) = 1;
+  - json_array_append, json_array_insert, json_insert, json_replace, json_set:
+    - Use pair of  [path, value] in the syntax: `'path, value'`
+    - Example: SELECT c1 FROM ftbl WHERE  member_of(c1, json_set(c2, `'$.a, c2'`, `'$.b, c3'`, `'$.c, 1'`, `'$, "a"'`, `'$, pi()'`)) = 1;
+  - `json_extract()`, `json_value()`, `json_unquote()` and `convert()` have return type is text in postgres, so we need to convert to appropriate type if required:
+    - Example: SELECT * FROM ftbl json_extract(c1, '$.a')::numeric(10, 2) > 0;
+    - List cast function can be accepted:
+    ```
+    "float4", "float8", "int2", "int4", "int8", "numeric", "double precision",
+    "char", "varchar",
+    "time", "timetz", "timestamp", "timestamptz",
+    "json", "jsonb",
+    "bytea",
+    ```
+  - json_value:   
+  Example: SELECT c1 FROM ftbl WHERE json_value(c1, '$.a', `'returning date'`)::date > '2001-01-01';
+
 ### JOIN clause push-down
-The latest version will push-down the foreign table join clauses (LEFT JOIN, RIGHT JOIN and JOIN_INNER) to
-the foreign server.
+mysql_fdw now also supports join push-down. The joins between two
+foreign tables from the same remote MySQL server are pushed to a remote
+server, instead of fetching all the rows for both the tables and
+performing a join locally, thereby enhancing the performance. Currently,
+joins involving only relational and arithmetic operators in join-clauses
+are pushed down to avoid any potential join failure. Also, only the
+INNER and LEFT/RIGHT OUTER joins are supported, and not the FULL OUTER,
+SEMI, and ANTI join. This is a performance feature.
+
+### New feature
+- Support TRUNCATE with basic syntax only.
+- Allow foreign servers to keep connections open after transaction completion. This is controlled by `keep_connections` and default value is enable.
+- Support listing cached connections to remote servers by using function mysql_fdw_get_connections().
+- Support discard cached connections to remote servers by using function mysql_fdw_disconnect(), mysql_fdw_disconnect_all().
+- Support bulk insert by using batch_size option.
+- Whole row reference is implemented by modifying the target list to select all whole row reference members and form new row for the whole row in FDW when interate foreign scan.
 
 ### Prepared Statement
 (Refactoring for `select` queries to use prepared statement)
 
 The `select` queries are now using prepared statements instead of simple
 query protocol.
+
 
 Usage
 -----
@@ -193,23 +307,13 @@ Limit  (cost=10.00..11.00 rows=1 width=36)
 
 Contributing
 ------------
-If you experience any bug and have a fix for that, or have a new idea,
-create a ticket on github page. Before creating a pull request please
-read the [contributing guidelines][3].
-
-Support
--------
-This project will be modified to maintain compatibility with new
-PostgreSQL and EDB Postgres Advanced Server releases.
-
-If you require commercial support, please contact the EnterpriseDB sales
-team, or check whether your existing PostgreSQL support provider can
-also support mysql_fdw.
-
+Opening issues and pull requests on GitHub are welcome.
 
 License
 -------
-Copyright (c) 2011-2020, EnterpriseDB Corporation.
+Copyright (c) 2021, TOSHIBA Corporation.
+
+Copyright (c) 2011-2021, EnterpriseDB Corporation.
 
 Permission to use, copy, modify, and distribute this software and its
 documentation for any purpose, without fee, and without a written
@@ -217,9 +321,8 @@ agreement is hereby granted, provided that the above copyright notice
 and this paragraph and the following two paragraphs appear in all
 copies.
 
-See the [`LICENSE`][4] file for full details.
+See the [`LICENSE`][3] file for full details.
 
 [1]: http://www.mysql.com
 [2]: https://github.com/enterprisedb/mysql_fdw/issues/new
-[3]: CONTRIBUTING.md
-[4]: LICENSE
+[3]: LICENSE

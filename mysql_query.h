@@ -4,7 +4,7 @@
  * 		Foreign-data wrapper for remote MySQL servers
  *
  * Portions Copyright (c) 2012-2014, PostgreSQL Global Development Group
- * Portions Copyright (c) 2004-2020, EnterpriseDB Corporation.
+ * Portions Copyright (c) 2004-2021, EnterpriseDB Corporation.
  *
  * IDENTIFICATION
  * 		mysql_query.h
@@ -25,10 +25,10 @@
 #include "utils/rel.h"
 
 
-Datum mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column *column, MYSQL_FIELD field);
-void mysql_bind_sql_var(Oid type, int attnum, Datum value, MYSQL_BIND *binds,
-						bool *isnull);
-void mysql_bind_result(Oid pgtyp, int pgtypmod, MYSQL_FIELD *field,
-					   mysql_column *column);
+Datum		mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column * column, MYSQL_FIELD field);
+void		mysql_bind_sql_var(Oid type, int attnum, Datum value, MYSQL_BIND * binds,
+							   bool *isnull);
+void		mysql_bind_result(Oid pgtyp, int pgtypmod, MYSQL_FIELD * field,
+							  mysql_column * column);
 
 #endif							/* MYSQL_QUERY_H */
