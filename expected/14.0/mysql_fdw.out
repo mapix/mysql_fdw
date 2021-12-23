@@ -1,0 +1,2033 @@
+\set ECHO none
+--Testcase 179:
+SET datestyle TO "ISO, YMD";
+--Testcase 1:
+CREATE EXTENSION mysql_fdw;
+--Testcase 2:
+\df mysql_fdw*
+                                           List of functions
+ Schema |           Name            | Result data type |           Argument data types           | Type 
+--------+---------------------------+------------------+-----------------------------------------+------
+ public | mysql_fdw_disconnect      | boolean          | text                                    | func
+ public | mysql_fdw_disconnect_all  | boolean          |                                         | func
+ public | mysql_fdw_get_connections | SETOF record     | OUT server_name text, OUT valid boolean | func
+ public | mysql_fdw_handler         | fdw_handler      |                                         | func
+ public | mysql_fdw_validator       | void             | text[], oid                             | func
+ public | mysql_fdw_version         | integer          |                                         | func
+(6 rows)
+
+--Testcase 180:
+SELECT * FROM public.mysql_fdw_version();
+ mysql_fdw_version 
+-------------------
+             20602
+(1 row)
+
+--Testcase 181:
+SELECT mysql_fdw_version();
+ mysql_fdw_version 
+-------------------
+             20602
+(1 row)
+
+-- Before running this file User must create database mysql_fdw_regress on
+-- MySQL with all permission for 'edb' user with 'edb' password and ran
+-- mysql_init.sh file to create tables.
+--Testcase 3:
+CREATE SERVER mysql_svr FOREIGN DATA WRAPPER mysql_fdw
+  OPTIONS (host :MYSQL_HOST, port :MYSQL_PORT);
+--Testcase 4:
+CREATE USER MAPPING FOR PUBLIC SERVER mysql_svr
+  OPTIONS (username :MYSQL_USER_NAME, password :MYSQL_PASS);
+-- ===================================================================
+-- create foreign tables
+-- ===================================================================
+--Testcase 5:
+CREATE FOREIGN TABLE ft1 (c1 INTEGER, c2 INTEGER, c3 CHAR(9), c4 timestamptz, c5 timestamp, c6 DECIMAL, c7 INTEGER, c8 SMALLINT)
+  SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_post', table_name 'position_data1');
+--Testcase 6:
+CREATE FOREIGN TABLE ft2 (c1 INTEGER, c2 INTEGER, c3 CHAR(9), c4 timestamptz, c5 timestamptz, c6 DECIMAL, c7 INTEGER, c8 SMALLINT)
+  SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_post', table_name 'position_data2');
+--Testcase 7:
+CREATE FOREIGN TABLE ft3 (i int, b bool)
+  SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_post', table_name 'table_data');
+--Testcase 8:
+INSERT INTO ft1 VALUES (1, 1, 'ADMIN', '1970-01-01'::timestamptz, '1970-05-06 00:00:00', 800.23, NULL, 20);
+--Testcase 9:
+INSERT INTO ft1 VALUES (2, 2, 'SALESMAN', '1970-01-01'::timestamptz, '1970-05-07 00:00:00', 1600.00, 300, 30);
+--Testcase 10:
+INSERT INTO ft1 VALUES (3, 3, 'SALESMAN', '1970-01-01'::timestamptz, '1970-05-08 00:00:00', 1250, 500, 30);
+--Testcase 11:
+INSERT INTO ft1 VALUES (4, 4, 'MANAGER', '1970-01-01'::timestamptz, '1970-05-09 00:00:00', 2975.12, NULL, 20);
+--Testcase 12:
+INSERT INTO ft1 VALUES (5, 5, 'SALESMAN', '1970-01-01'::timestamptz, '1970-05-10 00:00:00', 1250, 1400, 30);
+--Testcase 13:
+INSERT INTO ft1 VALUES (6, 6, 'MANAGER', '1970-01-01'::timestamptz, '1970-05-11 00:00:00', 2850, NULL, 30);
+--Testcase 14:
+INSERT INTO ft1 VALUES (7, 7, 'MANAGER', '1970-01-01'::timestamptz, '1970-05-12 00:00:00', 2450.45, NULL, 10);
+--Testcase 15:
+INSERT INTO ft1 VALUES (8, 8, 'FINANCE', '1970-01-01'::timestamptz, '1970-05-13 00:00:00', 3000, NULL, 20);
+--Testcase 16:
+INSERT INTO ft1 VALUES (9, 9, 'HEAD', '1970-01-01'::timestamptz, '1970-05-14 00:00:00', 5000, NULL, 10);
+--Testcase 17:
+INSERT INTO ft1 VALUES (10, 10, 'SALESMAN', '1970-01-01'::timestamptz, '1970-05-15 00:00:00', 1500, 0, 30);
+--Testcase 18:
+INSERT INTO ft2 VALUES(1, 1, 'ADMIN','1970-01-01'::timestamptz, '1970-05-06 00:00:00', 800, NULL, 20);
+--Testcase 19:
+INSERT INTO ft2 VALUES(2, 2, 'DEVELOPER','1970-01-01'::timestamptz, '1970-05-07 00:00:00', 809, 250, 20);
+--Testcase 20:
+INSERT INTO ft2 VALUES(3, 3, 'TESTER', '1970-01-01'::timestamptz, '1970-05-08 00:00:00', 809, 251, 20);
+--Testcase 21:
+INSERT INTO ft2 VALUES(4, 4, 'SALEMAN', '1970-01-01'::timestamptz, '1970-05-09 00:00:00', 809, 252, 20);
+--Testcase 22:
+INSERT INTO ft2 VALUES(5, 5, 'SALEMAN', '1970-01-01'::timestamptz, '1970-05-10 00:00:00', 808, 252, 20);
+--Testcase 23:
+INSERT INTO ft2 VALUES(6, 6, 'MANAGER', '1970-01-01'::timestamptz, '1970-05-11 00:00:00', 809, 252, 20);
+--Testcase 24:
+INSERT INTO ft2 VALUES(7, 7, 'SALEMAN', '1970-01-01'::timestamptz, '1970-05-12 00:00:00', 809, 252, 20);
+--Testcase 25:
+INSERT INTO ft2 VALUES(8, 8, 'SALEMAN', '1970-01-01'::timestamptz, '1970-05-13 00:00:00', 809, 252, 20);
+--Testcase 26:
+INSERT INTO ft2 VALUES(9, 9, 'HEAD', '1970-01-01'::timestamptz, '1970-05-14 00:00:00', 809, 252, 20);
+--Testcase 27:
+INSERT INTO ft2 VALUES(10, 10, 'FINANCE', '1970-01-01'::timestamptz, '1970-05-15 00:00:00', 809, 252, 20);
+--Testcase 28:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE (c1 IS NOT NULL) IS DISTINCT FROM (c7 IS NOT NULL);
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((NOT ((`c1` IS NOT NULL) <=> (`c7` IS NOT NULL))))
+(3 rows)
+
+--Testcase 29:
+SELECT * FROM ft1 t1 WHERE (c1 IS NOT NULL) IS DISTINCT FROM (c7 IS NOT NULL);
+ c1 | c2 |   c3    |           c4           |         c5          |     c6     | c7 | c8 
+----+----+---------+------------------------+---------------------+------------+----+----
+  1 |  1 | ADMIN   | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |    | 20
+  4 |  4 | MANAGER | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |    | 20
+  6 |  6 | MANAGER | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |    | 30
+  7 |  7 | MANAGER | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |    | 10
+  8 |  8 | FINANCE | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |    | 20
+  9 |  9 | HEAD    | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |    | 10
+(6 rows)
+
+--Testcase 30:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE (c1 IS NOT NULL) IS NOT DISTINCT FROM (c1 IS NOT NULL);
+                                                                            QUERY PLAN                                                                            
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (((`c1` IS NOT NULL) <=> (`c1` IS NOT NULL)))
+(3 rows)
+
+--Testcase 31:
+SELECT * FROM ft1 t1 WHERE (c1 IS NOT NULL) IS NOT DISTINCT FROM (c1 IS NOT NULL);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 32:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE NOT(c1 > 4 OR (c1 IS NOT NULL) IS NOT DISTINCT FROM (c7 IS NOT NULL));
+                                                                                        QUERY PLAN                                                                                        
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` <= 4)) AND ((NOT ((`c1` IS NOT NULL) <=> (`c7` IS NOT NULL))))
+(3 rows)
+
+--Testcase 33:
+SELECT * FROM ft1 t1 WHERE NOT(c1 > 4 OR (c1 IS NOT NULL) IS NOT DISTINCT FROM (c7 IS NOT NULL));
+ c1 | c2 |   c3    |           c4           |         c5          |     c6     | c7 | c8 
+----+----+---------+------------------------+---------------------+------------+----+----
+  1 |  1 | ADMIN   | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |    | 20
+  4 |  4 | MANAGER | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |    | 20
+(2 rows)
+
+--Testcase 34:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE NOT(c1 > 4 AND (c1 IS NOT NULL) IS NOT DISTINCT FROM (c1 IS NOT NULL));
+                                                                                       QUERY PLAN                                                                                        
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (((`c1` <= 4) OR (NOT ((`c1` IS NOT NULL) <=> (`c1` IS NOT NULL)))))
+(3 rows)
+
+--Testcase 35:
+SELECT * FROM ft1 t1 WHERE NOT(c1 > 4 AND (c1 IS NOT NULL) IS NOT DISTINCT FROM (c1 IS NOT NULL));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 | 500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |     | 20
+(4 rows)
+
+--Testcase 36:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT ((1 IS DISTINCT FROM i) IS NOT DISTINCT FROM b) from ft3;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Foreign Scan on public.ft3
+   Output: (NOT ((1 IS DISTINCT FROM i) IS DISTINCT FROM b))
+   Remote query: SELECT `i`, `b` FROM `mysql_fdw_post`.`table_data`
+(3 rows)
+
+--Testcase 37:
+SELECT ((1 IS DISTINCT FROM i) IS NOT DISTINCT FROM b) from ft3;
+ ?column? 
+----------
+ f
+ f
+ t
+ f
+ f
+(5 rows)
+
+--Testcase 38:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT (b IS NOT DISTINCT FROM (1 IS DISTINCT FROM i)) from ft3;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Foreign Scan on public.ft3
+   Output: (NOT (b IS DISTINCT FROM (1 IS DISTINCT FROM i)))
+   Remote query: SELECT `i`, `b` FROM `mysql_fdw_post`.`table_data`
+(3 rows)
+
+--Testcase 39:
+SELECT (b IS NOT DISTINCT FROM (1 IS DISTINCT FROM i)) from ft3;
+ ?column? 
+----------
+ f
+ f
+ t
+ f
+ f
+(5 rows)
+
+--Testcase 40:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT i, b FROM ft3 WHERE ((1 IS DISTINCT FROM i) IS NOT DISTINCT FROM b);
+                                               QUERY PLAN                                               
+--------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft3
+   Output: i, b
+   Remote query: SELECT `i`, `b` FROM `mysql_fdw_post`.`table_data` WHERE (((NOT (1 <=> `i`)) <=> `b`))
+(3 rows)
+
+--Testcase 41:
+SELECT i, b FROM ft3 WHERE ((1 IS DISTINCT FROM i) IS NOT DISTINCT FROM b);
+ i | b 
+---+---
+   | t
+(1 row)
+
+--Testcase 42:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT i, b FROM ft3 WHERE (b IS NOT DISTINCT FROM (1 IS DISTINCT FROM i));
+                                               QUERY PLAN                                               
+--------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft3
+   Output: i, b
+   Remote query: SELECT `i`, `b` FROM `mysql_fdw_post`.`table_data` WHERE ((`b` <=> (NOT (1 <=> `i`))))
+(3 rows)
+
+--Testcase 43:
+SELECT i, b FROM ft3 WHERE (b IS NOT DISTINCT FROM (1 IS DISTINCT FROM i));
+ i | b 
+---+---
+   | t
+(1 row)
+
+--Testcase 177:
+EXPLAIN VERBOSE
+  SELECT max(c1), max(c2)+1 FROM ft1 WHERE NOT EXISTS (SELECT c1 FROM ft1 WHERE c3='none') GROUP BY c1 ORDER BY 1 ASC, 2 DESC LIMIT 5 OFFSET 0;
+                                                                                                                  QUERY PLAN                                                                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan  (cost=263.74..263.85 rows=5 width=12)
+   Output: (max(ft1.c1)), ((max(ft1.c2) + 1)), ft1.c1
+   Local server startup cost: 10
+   Remote query: SELECT max(`c1`), (max(`c2`) + 1), `c1` FROM `mysql_fdw_post`.`position_data1` WHERE ((NOT ?)) GROUP BY 3 ORDER BY max(`c1`) IS NULL ASC, max(`c1`) ASC, (max(`c2`) + 1) IS NULL DESC, (max(`c2`) + 1) DESC LIMIT 5 OFFSET 0
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft1 ft1_1  (cost=100.00..153.00 rows=17 width=0)
+           Local server startup cost: 10
+           Remote query: SELECT NULL FROM `mysql_fdw_post`.`position_data1` WHERE ((`c3` = 'none'))
+(8 rows)
+
+--Testcase 178:
+SELECT max(c1), max(c2)+1 FROM ft1 WHERE NOT EXISTS (SELECT c1 FROM ft1 WHERE c3='none') GROUP BY c1 ORDER BY 1 ASC, 2 DESC LIMIT 5 OFFSET 0;
+ max | ?column? 
+-----+----------
+   1 |        2
+   2 |        3
+   3 |        4
+   4 |        5
+   5 |        6
+(5 rows)
+
+-- ===================================================================
+-- Any Array Test
+-- ===================================================================
+-- ANY(ARRAY(parameter)) with parameter is const/expression/sub-query and operators (=, <>, <, >, <=, >=)
+--Testcase 44:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 = ANY(ARRAY[c2, 1, c1 + 0]);
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1`  IN (`c2`, 1, (`c1` + 0)))
+(3 rows)
+
+--Testcase 45:
+SELECT * FROM ft1 t1 WHERE c1 = ANY(ARRAY[c2, 1, c1 + 0]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 46:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 <> ANY(ARRAY[c2, 1, c1 + 0]);
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` <> `c2`) OR (`c1` <> 1) OR (`c1` <> (`c1` + 0)))
+(3 rows)
+
+--Testcase 47:
+SELECT * FROM ft1 t1 WHERE c1 <> ANY(ARRAY[c2, 1, c1 + 0]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(9 rows)
+
+--Testcase 48:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 > ANY(ARRAY[c2, 1, c1 + 0]);
+                                                                               QUERY PLAN                                                                                
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` > `c2`) OR (`c1` > 1) OR (`c1` > (`c1` + 0)))
+(3 rows)
+
+--Testcase 49:
+SELECT * FROM ft1 t1 WHERE c1 > ANY(ARRAY[c2, 1, c1 + 0]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(9 rows)
+
+--Testcase 50:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 < ANY(ARRAY[c1, 1, c2 + 1]);
+                                                                               QUERY PLAN                                                                                
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` < `c1`) OR (`c1` < 1) OR (`c1` < (`c2` + 1)))
+(3 rows)
+
+--Testcase 51:
+SELECT * FROM ft1 t1 WHERE c1 < ANY(ARRAY[c1, 1, c2 + 1]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 52:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 >= ANY(ARRAY[c2, 1, c1 + 0]);
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` >= `c2`) OR (`c1` >= 1) OR (`c1` >= (`c1` + 0)))
+(3 rows)
+
+--Testcase 53:
+SELECT * FROM ft1 t1 WHERE c1 >= ANY(ARRAY[c2, 1, c1 + 0]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 54:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 <= ANY(ARRAY[c2, 1, c1 + 0]);
+                                                                                 QUERY PLAN                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` <= `c2`) OR (`c1` <= 1) OR (`c1` <= (`c1` + 0)))
+(3 rows)
+
+--Testcase 55:
+SELECT * FROM ft1 t1 WHERE c1 <= ANY(ARRAY[c2, 1, c1 + 0]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 56:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 = ANY(ARRAY[1, 2, 3]);
+                                                               QUERY PLAN                                                                
+-----------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1`  IN (1, 2, 3))
+(3 rows)
+
+--Testcase 57:
+SELECT * FROM ft1 t1 WHERE c1 = ANY(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 | 500 | 30
+(3 rows)
+
+--Testcase 58:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 <> ANY(ARRAY[1, 2, 3]);
+                                                                        QUERY PLAN                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` <> 1 OR `c1` <> 2 OR `c1` <> 3)
+(3 rows)
+
+--Testcase 59:
+SELECT * FROM ft1 t1 WHERE c1 <> ANY(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 60:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 < ANY(ARRAY[1, 2, 3]);
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` < 1 OR `c1` < 2 OR `c1` < 3)
+(3 rows)
+
+--Testcase 61:
+SELECT * FROM ft1 t1 WHERE c1 < ANY(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+(2 rows)
+
+--Testcase 62:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 > ANY(ARRAY[1, 2, 3]);
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` > 1 OR `c1` > 2 OR `c1` > 3)
+(3 rows)
+
+--Testcase 63:
+SELECT * FROM ft1 t1 WHERE c1 > ANY(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(9 rows)
+
+--Testcase 64:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 >= ANY(ARRAY[1, 2, 3]);
+                                                                        QUERY PLAN                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` >= 1 OR `c1` >= 2 OR `c1` >= 3)
+(3 rows)
+
+--Testcase 65:
+SELECT * FROM ft1 t1 WHERE c1 >= ANY(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 66:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 <= ANY(ARRAY[1, 2, 3]);
+                                                                        QUERY PLAN                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` <= 1 OR `c1` <= 2 OR `c1` <= 3)
+(3 rows)
+
+--Testcase 67:
+SELECT * FROM ft1 t1 WHERE c1 <= ANY(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 | 500 | 30
+(3 rows)
+
+--Testcase 68:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 = ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                  QUERY PLAN                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5`  IN ('1970-05-06 00:00:00', '1970-05-07 00:00:00'))
+(3 rows)
+
+--Testcase 69:
+SELECT * FROM ft1 t1 WHERE c5 = ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+(2 rows)
+
+--Testcase 70:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 <> ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                     QUERY PLAN                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` <> '1970-05-06 00:00:00' OR `c5` <> '1970-05-07 00:00:00')
+(3 rows)
+
+--Testcase 71:
+SELECT * FROM ft1 t1 WHERE c5 <> ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 72:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 < ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                    QUERY PLAN                                                                                     
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` < '1970-05-06 00:00:00' OR `c5` < '1970-05-07 00:00:00')
+(3 rows)
+
+--Testcase 73:
+SELECT * FROM ft1 t1 WHERE c5 < ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |  c3   |           c4           |         c5          |    c6     | c7 | c8 
+----+----+-------+------------------------+---------------------+-----------+----+----
+  1 |  1 | ADMIN | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 | 800.23000 |    | 20
+(1 row)
+
+--Testcase 74:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 > ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                    QUERY PLAN                                                                                     
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` > '1970-05-06 00:00:00' OR `c5` > '1970-05-07 00:00:00')
+(3 rows)
+
+--Testcase 75:
+SELECT * FROM ft1 t1 WHERE c5 > ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(9 rows)
+
+--Testcase 76:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 <= ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                     QUERY PLAN                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` <= '1970-05-06 00:00:00' OR `c5` <= '1970-05-07 00:00:00')
+(3 rows)
+
+--Testcase 77:
+SELECT * FROM ft1 t1 WHERE c5 <= ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+(2 rows)
+
+--Testcase 78:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 >= ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                     QUERY PLAN                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` >= '1970-05-06 00:00:00' OR `c5` >= '1970-05-07 00:00:00')
+(3 rows)
+
+--Testcase 79:
+SELECT * FROM ft1 t1 WHERE c5 >= ANY(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 80:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ( FIND_IN_SET (`c1`,?))
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(7 rows)
+
+--Testcase 81:
+SELECT * FROM ft1 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 | 500 | 30
+(2 rows)
+
+--Testcase 82:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 <> ANY(ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                                   QUERY PLAN                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ( NOT  FIND_IN_SET (`c1`,?))
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(7 rows)
+
+--Testcase 83:
+SELECT * FROM ft1 WHERE c1 <> ANY(ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(8 rows)
+
+--Testcase 84:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 > ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Filter: (ft1.c1 > ANY ($0))
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1`
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(8 rows)
+
+--Testcase 85:
+SELECT * FROM ft1 WHERE c1 > ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(9 rows)
+
+--Testcase 86:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 < ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Filter: (ft1.c1 < ANY ($0))
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1`
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(8 rows)
+
+--Testcase 87:
+SELECT * FROM ft1 WHERE c1 < ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 | 500 | 30
+(3 rows)
+
+--Testcase 88:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 >= ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Filter: (ft1.c1 >= ANY ($0))
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1`
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(8 rows)
+
+--Testcase 89:
+SELECT * FROM ft1 WHERE c1 >= ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(10 rows)
+
+--Testcase 90:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 <= ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Filter: (ft1.c1 <= ANY ($0))
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1`
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(8 rows)
+
+--Testcase 91:
+SELECT * FROM ft1 WHERE c1 <= ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 | 500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |     | 20
+(4 rows)
+
+-- ALL(ARRAY(parameter)) with parameter is const/expression/sub-query and operators (=, <>, <, >, <=, >=)
+--Testcase 92:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 <> ALL(ARRAY[c1 + 1, 1, 3]);
+                                                                      QUERY PLAN                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1`  NOT IN ((`c1` + 1), 1, 3))
+(3 rows)
+
+--Testcase 93:
+SELECT * FROM ft1 t1 WHERE c1 <> ALL(ARRAY[c1 + 1, 1, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(8 rows)
+
+--Testcase 94:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 > ALL(ARRAY[c1 - 1, 1, 3]);
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` > (`c1` - 1)) AND (`c1` > 1) AND (`c1` > 3))
+(3 rows)
+
+--Testcase 95:
+SELECT * FROM ft1 t1 WHERE c1 > ALL(ARRAY[c1 - 1, 1, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(7 rows)
+
+--Testcase 96:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 < ALL(ARRAY[c1 + 1, 5, 6]);
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` < (`c1` + 1)) AND (`c1` < 5) AND (`c1` < 6))
+(3 rows)
+
+--Testcase 97:
+SELECT * FROM ft1 t1 WHERE c1 < ALL(ARRAY[c1 + 1, 5, 6]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |     | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 | 500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |     | 20
+(4 rows)
+
+--Testcase 98:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 >= ALL(ARRAY[c1, 1, 3]);
+                                                                             QUERY PLAN                                                                              
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` >= `c1`) AND (`c1` >= 1) AND (`c1` >= 3))
+(3 rows)
+
+--Testcase 99:
+SELECT * FROM ft1 t1 WHERE c1 >= ALL(ARRAY[c1, 1, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(8 rows)
+
+--Testcase 100:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 <= ALL(ARRAY[c2, 1, c1 + 0]);
+                                                                                  QUERY PLAN                                                                                  
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ((`c1` <= `c2`) AND (`c1` <= 1) AND (`c1` <= (`c1` + 0)))
+(3 rows)
+
+--Testcase 101:
+SELECT * FROM ft1 t1 WHERE c1 <= ALL(ARRAY[c2, 1, c1 + 0]);
+ c1 | c2 |  c3   |           c4           |         c5          |    c6     | c7 | c8 
+----+----+-------+------------------------+---------------------+-----------+----+----
+  1 |  1 | ADMIN | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 | 800.23000 |    | 20
+(1 row)
+
+--Testcase 102:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 <> ALL(ARRAY[1, 2, 3]);
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1`  NOT IN (1, 2, 3))
+(3 rows)
+
+--Testcase 103:
+SELECT * FROM ft1 t1 WHERE c1 <> ALL(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(7 rows)
+
+--Testcase 104:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 < ALL(ARRAY[2, 3, 4]);
+                                                                       QUERY PLAN                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` < 2 AND `c1` < 3 AND `c1` < 4)
+(3 rows)
+
+--Testcase 105:
+SELECT * FROM ft1 t1 WHERE c1 < ALL(ARRAY[2, 3, 4]);
+ c1 | c2 |  c3   |           c4           |         c5          |    c6     | c7 | c8 
+----+----+-------+------------------------+---------------------+-----------+----+----
+  1 |  1 | ADMIN | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 | 800.23000 |    | 20
+(1 row)
+
+--Testcase 106:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 > ALL(ARRAY[1, 2, 3]);
+                                                                       QUERY PLAN                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` > 1 AND `c1` > 2 AND `c1` > 3)
+(3 rows)
+
+--Testcase 107:
+SELECT * FROM ft1 t1 WHERE c1 > ALL(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(7 rows)
+
+--Testcase 108:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 >= ALL(ARRAY[1, 2, 3]);
+                                                                         QUERY PLAN                                                                         
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` >= 1 AND `c1` >= 2 AND `c1` >= 3)
+(3 rows)
+
+--Testcase 109:
+SELECT * FROM ft1 t1 WHERE c1 >= ALL(ARRAY[1, 2, 3]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(8 rows)
+
+--Testcase 110:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c1 <= ALL(ARRAY[1, 2, 3]);
+                                                                         QUERY PLAN                                                                         
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c1` <= 1 AND `c1` <= 2 AND `c1` <= 3)
+(3 rows)
+
+--Testcase 111:
+SELECT * FROM ft1 t1 WHERE c1 <= ALL(ARRAY[1, 2, 3]);
+ c1 | c2 |  c3   |           c4           |         c5          |    c6     | c7 | c8 
+----+----+-------+------------------------+---------------------+-----------+----+----
+  1 |  1 | ADMIN | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 | 800.23000 |    | 20
+(1 row)
+
+--Testcase 112:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 <> ALL(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                    QUERY PLAN                                                                                    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5`  NOT IN ('1970-05-06 00:00:00', '1970-05-07 00:00:00'))
+(3 rows)
+
+--Testcase 113:
+SELECT * FROM ft1 t1 WHERE c5 <> ALL(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(8 rows)
+
+--Testcase 114:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 < ALL(ARRAY['1970-05-07 00:00:00'::timestamp,'1970-05-08 00:00:00'::timestamp]);
+                                                                                     QUERY PLAN                                                                                     
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` < '1970-05-07 00:00:00' AND `c5` < '1970-05-08 00:00:00')
+(3 rows)
+
+--Testcase 115:
+SELECT * FROM ft1 t1 WHERE c5 < ALL(ARRAY['1970-05-07 00:00:00'::timestamp,'1970-05-08 00:00:00'::timestamp]);
+ c1 | c2 |  c3   |           c4           |         c5          |    c6     | c7 | c8 
+----+----+-------+------------------------+---------------------+-----------+----+----
+  1 |  1 | ADMIN | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 | 800.23000 |    | 20
+(1 row)
+
+--Testcase 116:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 > ALL(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                     QUERY PLAN                                                                                     
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` > '1970-05-06 00:00:00' AND `c5` > '1970-05-07 00:00:00')
+(3 rows)
+
+--Testcase 117:
+SELECT * FROM ft1 t1 WHERE c5 > ALL(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(8 rows)
+
+--Testcase 118:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 <= ALL(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                      QUERY PLAN                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` <= '1970-05-06 00:00:00' AND `c5` <= '1970-05-07 00:00:00')
+(3 rows)
+
+--Testcase 119:
+SELECT * FROM ft1 t1 WHERE c5 <= ALL(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |  c3   |           c4           |         c5          |    c6     | c7 | c8 
+----+----+-------+------------------------+---------------------+-----------+----+----
+  1 |  1 | ADMIN | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 | 800.23000 |    | 20
+(1 row)
+
+--Testcase 120:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 t1 WHERE c5 >= ALL(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+                                                                                      QUERY PLAN                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1 t1
+   Output: c1, c2, c3, c4, c5, c6, c7, c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE (`c5` >= '1970-05-06 00:00:00' AND `c5` >= '1970-05-07 00:00:00')
+(3 rows)
+
+--Testcase 121:
+SELECT * FROM ft1 t1 WHERE c5 >= ALL(ARRAY['1970-05-06 00:00:00'::timestamp,'1970-05-07 00:00:00'::timestamp]);
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(9 rows)
+
+--Testcase 122:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 = ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ( FIND_IN_SET (`c1`,?))
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(7 rows)
+
+--Testcase 123:
+SELECT * FROM ft1 WHERE c1 = ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     | c7  | c8 
+----+----+----------+------------------------+---------------------+------------+-----+----
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 | 300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 | 500 | 30
+(2 rows)
+
+--Testcase 124:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 <> ALL(ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                                   QUERY PLAN                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1` WHERE ( NOT  FIND_IN_SET (`c1`,?))
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(7 rows)
+
+--Testcase 125:
+SELECT * FROM ft1 WHERE c1 <> ALL(ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(8 rows)
+
+--Testcase 126:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 > ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Filter: (ft1.c1 > ALL ($0))
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1`
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(8 rows)
+
+--Testcase 127:
+SELECT * FROM ft1 WHERE c1 > ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(6 rows)
+
+--Testcase 128:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 < ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 > 5));
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Filter: (ft1.c1 < ALL ($0))
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1`
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` > 5))
+(8 rows)
+
+--Testcase 129:
+SELECT * FROM ft1 WHERE c1 < ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 > 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  1 |  1 | ADMIN    | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 |  800.23000 |      | 20
+  2 |  2 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-07 00:00:00 | 1600.00000 |  300 | 30
+  3 |  3 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-08 00:00:00 | 1250.00000 |  500 | 30
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+(5 rows)
+
+--Testcase 130:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 >= ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Filter: (ft1.c1 >= ALL ($0))
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1`
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(8 rows)
+
+--Testcase 131:
+SELECT * FROM ft1 WHERE c1 >= ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |    c3    |           c4           |         c5          |     c6     |  c7  | c8 
+----+----+----------+------------------------+---------------------+------------+------+----
+  4 |  4 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-09 00:00:00 | 2975.12000 |      | 20
+  5 |  5 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-10 00:00:00 | 1250.00000 | 1400 | 30
+  6 |  6 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-11 00:00:00 | 2850.00000 |      | 30
+  7 |  7 | MANAGER  | 1970-01-01 08:00:00-08 | 1970-05-12 00:00:00 | 2450.45000 |      | 10
+  8 |  8 | FINANCE  | 1970-01-01 08:00:00-08 | 1970-05-13 00:00:00 | 3000.00000 |      | 20
+  9 |  9 | HEAD     | 1970-01-01 08:00:00-08 | 1970-05-14 00:00:00 | 5000.00000 |      | 10
+ 10 | 10 | SALESMAN | 1970-01-01 08:00:00-08 | 1970-05-15 00:00:00 | 1500.00000 |    0 | 30
+(7 rows)
+
+--Testcase 132:
+EXPLAIN (VERBOSE, COSTS OFF)
+  SELECT * FROM ft1 WHERE c1 <= ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft1
+   Output: ft1.c1, ft1.c2, ft1.c3, ft1.c4, ft1.c5, ft1.c6, ft1.c7, ft1.c8
+   Filter: (ft1.c1 <= ALL ($0))
+   Remote query: SELECT `c1`, `c2`, `c3`, `c4`, `c5`, `c6`, `c7`, `c8` FROM `mysql_fdw_post`.`position_data1`
+   InitPlan 1 (returns $0)
+     ->  Foreign Scan on public.ft2
+           Output: ft2.c1
+           Remote query: SELECT `c1` FROM `mysql_fdw_post`.`position_data2` WHERE ((`c1` < 5))
+(8 rows)
+
+--Testcase 133:
+SELECT * FROM ft1 WHERE c1 <= ALL (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+ c1 | c2 |  c3   |           c4           |         c5          |    c6     | c7 | c8 
+----+----+-------+------------------------+---------------------+-----------+----+----
+  1 |  1 | ADMIN | 1970-01-01 08:00:00-08 | 1970-05-06 00:00:00 | 800.23000 |    | 20
+(1 row)
+
+-- ===================================================================
+-- Array Subscripting test
+-- ===================================================================
+-- Create foreign tables
+--Testcase 134:
+CREATE FOREIGN TABLE ft5 (id int, c1 int, c2 int, c3 text)
+  SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_regress', table_name 's6');
+--Testcase 135:
+INSERT INTO ft5
+	SELECT  id,
+          	id,
+	        id % 5,
+	        to_char(id, 'FM00000')
+	FROM generate_series(1, 10) id;
+--Testcase 136:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 = (ARRAY[c1,c2,3])[2];
+                                                     QUERY PLAN                                                     
+--------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..125.17 rows=6 width=44)
+   Output: id, c1, c2, c3
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6` WHERE ((`c1` = ELT(2, `c1`, `c2`, 3)))
+(4 rows)
+
+--Testcase 137:
+SELECT * FROM ft5 t1 WHERE c1 = (ARRAY[c1,c2,3])[2];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+  3 |  3 |  3 | 00003
+  4 |  4 |  4 | 00004
+(4 rows)
+
+--Testcase 138:
+SELECT * FROM ft5 t1 WHERE c1 = c2;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+  3 |  3 |  3 | 00003
+  4 |  4 |  4 | 00004
+(4 rows)
+
+--Testcase 139:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 > (ARRAY[c1,c2,3])[2];
+                                                     QUERY PLAN                                                     
+--------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..133.07 rows=401 width=44)
+   Output: id, c1, c2, c3
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6` WHERE ((`c1` > ELT(2, `c1`, `c2`, 3)))
+(4 rows)
+
+--Testcase 140:
+SELECT * FROM ft5 t1 WHERE c1 > (ARRAY[c1,c2,3])[2];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  5 |  5 |  0 | 00005
+  6 |  6 |  1 | 00006
+  7 |  7 |  2 | 00007
+  8 |  8 |  3 | 00008
+  9 |  9 |  4 | 00009
+ 10 | 10 |  0 | 00010
+(6 rows)
+
+--Testcase 141:
+SELECT * FROM ft5 t1 WHERE c1 > c2;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  5 |  5 |  0 | 00005
+  6 |  6 |  1 | 00006
+  7 |  7 |  2 | 00007
+  8 |  8 |  3 | 00008
+  9 |  9 |  4 | 00009
+ 10 | 10 |  0 | 00010
+(6 rows)
+
+--Testcase 142:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 >= (ARRAY[c1,c2,3])[2];
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..133.07 rows=401 width=44)
+   Output: id, c1, c2, c3
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6` WHERE ((`c1` >= ELT(2, `c1`, `c2`, 3)))
+(4 rows)
+
+--Testcase 143:
+SELECT * FROM ft5 t1 WHERE c1 >= (ARRAY[c1,c2,3])[2];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+  3 |  3 |  3 | 00003
+  4 |  4 |  4 | 00004
+  5 |  5 |  0 | 00005
+  6 |  6 |  1 | 00006
+  7 |  7 |  2 | 00007
+  8 |  8 |  3 | 00008
+  9 |  9 |  4 | 00009
+ 10 | 10 |  0 | 00010
+(10 rows)
+
+--Testcase 144:
+SELECT * FROM ft5 t1 WHERE c1 >= c2;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+  3 |  3 |  3 | 00003
+  4 |  4 |  4 | 00004
+  5 |  5 |  0 | 00005
+  6 |  6 |  1 | 00006
+  7 |  7 |  2 | 00007
+  8 |  8 |  3 | 00008
+  9 |  9 |  4 | 00009
+ 10 | 10 |  0 | 00010
+(10 rows)
+
+--Testcase 145:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 < (ARRAY[c1,c2,3])[3];
+                                                     QUERY PLAN                                                     
+--------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..133.07 rows=401 width=44)
+   Output: id, c1, c2, c3
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6` WHERE ((`c1` < ELT(3, `c1`, `c2`, 3)))
+(4 rows)
+
+--Testcase 146:
+SELECT * FROM ft5 t1 WHERE c1 < (ARRAY[c1,c2,3])[3];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+(2 rows)
+
+--Testcase 147:
+SELECT * FROM ft5 t1 WHERE c1 < 3;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+(2 rows)
+
+--Testcase 148:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 <= (ARRAY[c1,c2,3])[3];
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..133.07 rows=401 width=44)
+   Output: id, c1, c2, c3
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6` WHERE ((`c1` <= ELT(3, `c1`, `c2`, 3)))
+(4 rows)
+
+--Testcase 149:
+SELECT * FROM ft5 t1 WHERE c1 <= (ARRAY[c1,c2,3])[3];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+  3 |  3 |  3 | 00003
+(3 rows)
+
+--Testcase 150:
+SELECT * FROM ft5 t1 WHERE c1 <= 3;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+  3 |  3 |  3 | 00003
+(3 rows)
+
+--Testcase 151:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 <> (ARRAY[c1,c2,3])[2];
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..149.01 rows=1198 width=44)
+   Output: id, c1, c2, c3
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6` WHERE ((`c1` <> ELT(2, `c1`, `c2`, 3)))
+(4 rows)
+
+--Testcase 152:
+SELECT * FROM ft5 t1 WHERE c1 <> (ARRAY[c1,c2,3])[2];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  5 |  5 |  0 | 00005
+  6 |  6 |  1 | 00006
+  7 |  7 |  2 | 00007
+  8 |  8 |  3 | 00008
+  9 |  9 |  4 | 00009
+ 10 | 10 |  0 | 00010
+(6 rows)
+
+--Testcase 153:
+SELECT * FROM ft5 t1 WHERE c1 <> c2;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  5 |  5 |  0 | 00005
+  6 |  6 |  1 | 00006
+  7 |  7 |  2 | 00007
+  8 |  8 |  3 | 00008
+  9 |  9 |  4 | 00009
+ 10 | 10 |  0 | 00010
+(6 rows)
+
+-- Syntax (ARRAY[c1,c2])[id]
+--Testcase 154:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 WHERE (ARRAY[c1,c2])[id] > 0;
+                                                   QUERY PLAN                                                    
+-----------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft5  (cost=100.00..133.07 rows=401 width=44)
+   Output: id, c1, c2, c3
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6` WHERE ((ELT(`id`, `c1`, `c2`) > 0))
+(4 rows)
+
+--Testcase 155:
+SELECT * FROM ft5 WHERE (ARRAY[c1,c2])[id] > 0;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+  2 |  2 |  2 | 00002
+(2 rows)
+
+-- Do not push down slice
+--Testcase 156:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 <> ((ARRAY[c1,c2,3])[1:2])[2];
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..149.01 rows=1198 width=44)
+   Output: id, c1, c2, c3
+   Filter: (t1.c1 <> ((ARRAY[t1.c1, t1.c2, 3])[1:2])[2])
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6`
+(5 rows)
+
+--Testcase 157:
+SELECT * FROM ft5 t1 WHERE c1 <> ((ARRAY[c1,c2,3])[1:2])[2];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  5 |  5 |  0 | 00005
+  6 |  6 |  1 | 00006
+  7 |  7 |  2 | 00007
+  8 |  8 |  3 | 00008
+  9 |  9 |  4 | 00009
+ 10 | 10 |  0 | 00010
+(6 rows)
+
+--Testcase 158:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 = (ARRAY[[c1,c2,3],[1,2,3]])[2][1];
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..125.17 rows=6 width=44)
+   Output: id, c1, c2, c3
+   Filter: (t1.c1 = (ARRAY[ARRAY[t1.c1, t1.c2, 3], '{1,2,3}'::integer[]])[2][1])
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6`
+(5 rows)
+
+--Testcase 159:
+SELECT * FROM ft5 t1 WHERE c1 = (ARRAY[[c1,c2,3],[1,2,3]])[2][1];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+(1 row)
+
+--Testcase 160:
+SELECT * FROM ft5 t1 WHERE c1 = 1;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  1 |  1 |  1 | 00001
+(1 row)
+
+--Testcase 161:
+EXPLAIN VERBOSE
+	SELECT * FROM ft5 t1 WHERE c1 = ((ARRAY[[c1,c2,3],[1,2,3],[3,2,1]])[2:3])[2][1];
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft5 t1  (cost=100.00..125.17 rows=6 width=44)
+   Output: id, c1, c2, c3
+   Filter: (t1.c1 = ((ARRAY[ARRAY[t1.c1, t1.c2, 3], '{1,2,3}'::integer[], '{3,2,1}'::integer[]])[2:3])[2][1])
+   Local server startup cost: 10
+   Remote query: SELECT `id`, `c1`, `c2`, `c3` FROM `mysql_fdw_regress`.`s6`
+(5 rows)
+
+--Testcase 162:
+SELECT * FROM ft5 t1 WHERE c1 = ((ARRAY[[c1,c2,3],[1,2,3],[3,2,1]])[2:3])[2][1];
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  3 |  3 |  3 | 00003
+(1 row)
+
+--Testcase 163:
+SELECT * FROM ft5 t1 WHERE c1 = 3;
+ id | c1 | c2 |  c3   
+----+----+----+-------
+  3 |  3 |  3 | 00003
+(1 row)
+
+-- Aggregate pushdown
+--Testcase 182:
+CREATE FOREIGN TABLE aggtest (
+  a       int2,
+  b     float4
+) SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_core', table_name 'aggtest');
+--Testcase 183:
+SELECT * FROM aggtest;
+  a  |    b    
+-----+---------
+  56 |     7.8
+ 100 |  99.097
+   0 | 0.09561
+  42 |  324.78
+(4 rows)
+
+--Testcase 184:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT avg(a) AS avg_32 FROM aggtest WHERE a < 100;
+                                     QUERY PLAN                                      
+-------------------------------------------------------------------------------------
+ Foreign Scan
+   Output: (avg(a))
+   Remote query: SELECT avg(`a`) FROM `mysql_fdw_core`.`aggtest` WHERE ((`a` < 100))
+(3 rows)
+
+--Testcase 185:
+SELECT avg(a) AS avg_32 FROM aggtest WHERE a < 100;
+ avg_32  
+---------
+ 32.6667
+(1 row)
+
+--Testcase 186:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(a) AS sum_198 FROM aggtest;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Foreign Scan
+   Output: (sum(a))
+   Remote query: SELECT sum(`a`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 187:
+SELECT sum(a) AS sum_198 FROM aggtest;
+ sum_198 
+---------
+     198
+(1 row)
+
+--Testcase 188:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(b) AS avg_431_773 FROM aggtest;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Foreign Scan
+   Output: (sum(b))
+   Remote query: SELECT sum(`b`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 189:
+SELECT sum(b) AS avg_431_773 FROM aggtest;
+ avg_431_773 
+-------------
+    431.7726
+(1 row)
+
+--Testcase 190:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a) AS max_100 FROM aggtest;
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Result
+   Output: $0
+   InitPlan 1 (returns $0)
+     ->  Limit
+           Output: aggtest.a
+           ->  Foreign Scan on public.aggtest
+                 Output: aggtest.a
+                 Remote query: SELECT `a` FROM `mysql_fdw_core`.`aggtest` WHERE ((`a` IS NOT NULL)) ORDER BY `a` IS NULL DESC, `a` DESC
+(8 rows)
+
+--Testcase 191:
+SELECT max(a) AS max_100 FROM aggtest;
+ max_100 
+---------
+     100
+(1 row)
+
+--Testcase 192:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(aggtest.b) AS max_324_78 FROM aggtest;
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Result
+   Output: $0
+   InitPlan 1 (returns $0)
+     ->  Limit
+           Output: aggtest.b
+           ->  Foreign Scan on public.aggtest
+                 Output: aggtest.b
+                 Remote query: SELECT `b` FROM `mysql_fdw_core`.`aggtest` WHERE ((`b` IS NOT NULL)) ORDER BY `b` IS NULL DESC, `b` DESC
+(8 rows)
+
+--Testcase 193:
+SELECT max(aggtest.b) AS max_324_78 FROM aggtest;
+ max_324_78 
+------------
+     324.78
+(1 row)
+
+--Testcase 194:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT min(a) AS min_0 FROM aggtest;
+                                                              QUERY PLAN                                                              
+--------------------------------------------------------------------------------------------------------------------------------------
+ Result
+   Output: $0
+   InitPlan 1 (returns $0)
+     ->  Limit
+           Output: aggtest.a
+           ->  Foreign Scan on public.aggtest
+                 Output: aggtest.a
+                 Remote query: SELECT `a` FROM `mysql_fdw_core`.`aggtest` WHERE ((`a` IS NOT NULL)) ORDER BY `a` IS NULL ASC, `a` ASC
+(8 rows)
+
+--Testcase 195:
+SELECT min(a) AS min_0 FROM aggtest;
+ min_0 
+-------
+     0
+(1 row)
+
+--Testcase 196:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT count(a) FROM aggtest;
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Foreign Scan
+   Output: (count(a))
+   Remote query: SELECT count(`a`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 197:
+SELECT count(a) FROM aggtest;
+ count 
+-------
+     4
+(1 row)
+
+--Testcase 198:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT min(aggtest.b) AS min_7_8 FROM aggtest WHERE b > 5;
+                                                                      QUERY PLAN                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Result
+   Output: $0
+   InitPlan 1 (returns $0)
+     ->  Limit
+           Output: aggtest.b
+           ->  Foreign Scan on public.aggtest
+                 Output: aggtest.b
+                 Remote query: SELECT `b` FROM `mysql_fdw_core`.`aggtest` WHERE ((`b` IS NOT NULL)) AND ((`b` > 5)) ORDER BY `b` IS NULL ASC, `b` ASC
+(8 rows)
+
+--Testcase 199:
+SELECT min(aggtest.b) AS min_7_8 FROM aggtest WHERE b > 5;
+ min_7_8 
+---------
+     7.8
+(1 row)
+
+--Testcase 200:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT stddev_pop(b) FROM aggtest;
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Foreign Scan
+   Output: (stddev_pop(b))
+   Remote query: SELECT stddev_pop(`b`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 201:
+SELECT stddev_pop(b) FROM aggtest;
+     stddev_pop     
+--------------------
+ 131.10703231895047
+(1 row)
+
+--Testcase 202:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT stddev_samp(b) FROM aggtest;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Foreign Scan
+   Output: (stddev_samp(b))
+   Remote query: SELECT stddev_samp(`b`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 203:
+SELECT stddev_samp(b) FROM aggtest;
+    stddev_samp     
+--------------------
+ 151.38936080399804
+(1 row)
+
+--Testcase 204:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT var_pop(b) FROM aggtest;
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Foreign Scan
+   Output: (var_pop(b))
+   Remote query: SELECT var_pop(`b`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 205:
+SELECT var_pop(b) FROM aggtest;
+      var_pop       
+--------------------
+ 17189.053923482323
+(1 row)
+
+--Testcase 206:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT var_samp(b) FROM aggtest;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Foreign Scan
+   Output: (var_samp(b))
+   Remote query: SELECT var_samp(`b`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 207:
+SELECT var_samp(b) FROM aggtest;
+      var_samp      
+--------------------
+ 22918.738564643096
+(1 row)
+
+--Testcase 208:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT variance(b) FROM aggtest;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Foreign Scan
+   Output: (variance(b))
+   Remote query: SELECT variance(`b`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 209:
+SELECT variance(b) FROM aggtest;
+      variance      
+--------------------
+ 17189.053923482323
+(1 row)
+
+--Testcase 210:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT json_agg(a), json_agg(b) FROM aggtest;
+                                          QUERY PLAN                                           
+-----------------------------------------------------------------------------------------------
+ Foreign Scan
+   Output: (json_agg(a)), (json_agg(b))
+   Remote query: SELECT json_arrayagg(`a`), json_arrayagg(`b`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 211:
+SELECT json_agg(a), json_agg(b) FROM aggtest;
+     json_agg     |                                    json_agg                                    
+------------------+--------------------------------------------------------------------------------
+ [56, 100, 0, 42] | [7.800000190734863, 99.09700012207033, 0.09561000019311904, 324.7799987792969]
+(1 row)
+
+--Testcase 212:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT json_object_agg(a, b) FROM aggtest;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Foreign Scan
+   Output: (json_object_agg(a, b))
+   Remote query: SELECT json_objectagg(`a`, `b`) FROM `mysql_fdw_core`.`aggtest`
+(3 rows)
+
+--Testcase 213:
+SELECT json_object_agg(a, b) FROM aggtest;
+                                            json_object_agg                                             
+--------------------------------------------------------------------------------------------------------
+ {"0": 0.09561000019311904, "42": 324.7799987792969, "56": 7.800000190734863, "100": 99.09700012207033}
+(1 row)
+
+--Testcase 214:
+CREATE FOREIGN TABLE bitwise_test(
+  i2 INT2,
+  i4 INT4,
+  i8 INT8,
+  i INTEGER,
+  x INT2
+) SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_core', table_name 'bitwise_test');
+--Testcase 215:
+DELETE FROM bitwise_test;
+--Testcase 216:
+INSERT INTO bitwise_test VALUES
+  (1, 1, 1, 1, 1),
+  (3, 3, 3, null, 2),
+  (7, 7, 7, 3, 4);
+--Testcase 217:
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT
+  BIT_AND(i2) AS "1",
+  BIT_AND(i4) AS "1",
+  BIT_AND(i8) AS "1",
+  BIT_AND(i)  AS "?",
+  BIT_AND(x)  AS "0",
+  BIT_OR(i2)  AS "7",
+  BIT_OR(i4)  AS "7",
+  BIT_OR(i8)  AS "7",
+  BIT_OR(i)   AS "?",
+  BIT_OR(x)   AS "7"
+FROM bitwise_test;
+                                                                                                                                                                               QUERY PLAN                                                                                                                                                                                
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan
+   Output: (bit_and(i2)), (bit_and(i4)), (bit_and(i8)), (bit_and(i)), (bit_and(x)), (bit_or(i2)), (bit_or(i4)), (bit_or(i8)), (bit_or(i)), (bit_or(x))
+   Remote query: SELECT CAST(bit_and(`i2`) AS SIGNED), CAST(bit_and(`i4`) AS SIGNED), CAST(bit_and(`i8`) AS SIGNED), CAST(bit_and(`i`) AS SIGNED), CAST(bit_and(`x`) AS SIGNED), CAST(bit_or(`i2`) AS SIGNED), CAST(bit_or(`i4`) AS SIGNED), CAST(bit_or(`i8`) AS SIGNED), CAST(bit_or(`i`) AS SIGNED), CAST(bit_or(`x`) AS SIGNED) FROM `mysql_fdw_core`.`bitwise_test`
+(3 rows)
+
+--Testcase 218:
+SELECT
+  BIT_AND(i2) AS "1",
+  BIT_AND(i4) AS "1",
+  BIT_AND(i8) AS "1",
+  BIT_AND(i)  AS "?",
+  BIT_AND(x)  AS "0",
+  BIT_OR(i2)  AS "7",
+  BIT_OR(i4)  AS "7",
+  BIT_OR(i8)  AS "7",
+  BIT_OR(i)   AS "?",
+  BIT_OR(x)   AS "7"
+FROM bitwise_test;
+ 1 | 1 | 1 | ? | 0 | 7 | 7 | 7 | ? | 7 
+---+---+---+---+---+---+---+---+---+---
+ 1 | 1 | 1 | 1 | 0 | 7 | 7 | 7 | 3 | 7
+(1 row)
+
+-- Unsupport syntax case
+--Testcase 164:
+CREATE FOREIGN TABLE ft4 (id int, c1 int[], c2 int, c3 text)
+  SERVER mysql_svr OPTIONS (dbname 'mysql_fdw_regress', table_name 's6');
+--Testcase 165:
+EXPLAIN VERBOSE
+	SELECT * FROM ft4 WHERE c2 = c1[1];
+ERROR:  mysql_fdw: Not support array data type
+
+--Testcase 166:
+SELECT * FROM ft4 WHERE c2 = c1[1];
+ERROR:  mysql_fdw: Not support array data type
+
+--Testcase 167:
+EXPLAIN VERBOSE
+	SELECT * FROM ft4 WHERE c2 = c1[c2];
+ERROR:  mysql_fdw: Not support array data type
+
+--Testcase 168:
+SELECT * FROM ft4 WHERE c2 = c1[c2];
+ERROR:  mysql_fdw: Not support array data type
+
+--Testcase 169:
+DROP FOREIGN TABLE ft1;
+--Testcase 170:
+DROP FOREIGN TABLE ft2;
+--Testcase 171:
+DROP FOREIGN TABLE ft3;
+--Testcase 172:
+DROP FOREIGN TABLE ft4;
+--Testcase 173:
+DROP FOREIGN TABLE ft5;
+--Testcase 219:
+DROP FOREIGN TABLE aggtest;
+--Testcase 220:
+DROP FOREIGN TABLE bitwise_test;
+--Testcase 174:
+DROP USER MAPPING FOR PUBLIC SERVER mysql_svr;
+--Testcase 175:
+DROP SERVER mysql_svr CASCADE;
+--Testcase 176:
+DROP EXTENSION mysql_fdw CASCADE;

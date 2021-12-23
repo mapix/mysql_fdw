@@ -650,7 +650,7 @@ mysql_quote_identifier(const char *str, char quotechar)
  * of the columns being retrieved by RETURNING (if any), which is returned
  * to *retrieved_attrs.
  */
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 /*
  * This also stores end position of the VALUES clause, so that we can rebuild
  * an INSERT for a batch of rows later.
@@ -665,6 +665,9 @@ mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte, Index rtindex,
 					 Relation rel, List *targetAttrs, bool doNothing)
 #endif
 {
+#if PG_VERSION_NUM >= 140000
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+#endif
 	ListCell   *lc;
 
 	appendStringInfo(buf, "INSERT %sINTO ", doNothing ? "IGNORE " : "");
@@ -695,10 +698,21 @@ mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte, Index rtindex,
 		first = true;
 		foreach(lc, targetAttrs)
 		{
+#if PG_VERSION_NUM >= 140000
+			int			attnum = lfirst_int(lc);
+			Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+#endif
+
 			if (!first)
 				appendStringInfoString(buf, ", ");
 			first = false;
-
+#if PG_VERSION_NUM >= 140000
+			if (attr->attgenerated)
+			{
+				appendStringInfoString(buf, "DEFAULT");
+				continue;
+			}
+#endif
 			appendStringInfo(buf, "?");
 			pindex++;
 		}
@@ -707,12 +721,12 @@ mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte, Index rtindex,
 	}
 	else
 		appendStringInfoString(buf, " DEFAULT VALUES");
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	*values_end_len = buf->len;
 #endif
 }
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 /*
  * rebuild remote INSERT statement
  *
@@ -720,14 +734,16 @@ mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte, Index rtindex,
  * right number of parameters.
  */
 void
-mysql_rebuild_insert_sql(StringInfo buf, char *orig_query,
-						 int values_end_len, int num_cols,
+mysql_rebuild_insert_sql(StringInfo buf, Relation rel,
+						 char *orig_query, List *target_attrs,
+						 int values_end_len, int num_params,
 						 int num_rows)
 {
-	int			i,
-				j;
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	int			i;
 	int			pindex;
 	bool		first;
+	ListCell   *lc;
 
 	/* Make sure the values_end_len is sensible */
 	Assert((values_end_len > 0) && (values_end_len <= strlen(orig_query)));
@@ -739,18 +755,30 @@ mysql_rebuild_insert_sql(StringInfo buf, char *orig_query,
 	 * Add records to VALUES clause (we already have parameters for the first
 	 * row, so start at the right offset).
 	 */
-	pindex = num_cols + 1;
+	pindex = num_params + 1;
 	for (i = 0; i < num_rows; i++)
 	{
 		appendStringInfoString(buf, ", (");
 
 		first = true;
-		for (j = 0; j < num_cols; j++)
+		foreach(lc, target_attrs)
 		{
+#if PG_VERSION_NUM >= 140000
+			int			attnum = lfirst_int(lc);
+			Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+#endif
+
 			if (!first)
 				appendStringInfoString(buf, ", ");
 			first = false;
 
+#if PG_VERSION_NUM >= 140000
+			if (attr->attgenerated)
+			{
+				appendStringInfoString(buf, "DEFAULT");
+				continue;
+			}
+#endif
 			appendStringInfo(buf, "?");
 			pindex++;
 		}
@@ -784,7 +812,7 @@ mysql_deparse_analyze(StringInfo sql, char *dbname, char *relname)
  * If qualify_col is true, add relation alias before the column name.
  */
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 /*
  * Construct a simple "TRUNCATE rel" statement
  */
@@ -889,7 +917,7 @@ mysql_deparse_locking_clause(deparse_expr_cxt *context)
 		 * that DECLARE CURSOR ... FOR UPDATE is supported, which it isn't
 		 * before 8.3.
 		 */
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 		if (bms_is_member(relid, root->all_result_relids) &&
 #else
 		if (relid == root->parse->resultRelation &&
@@ -1386,6 +1414,9 @@ void
 mysql_deparse_update(StringInfo buf, PlannerInfo *root, Index rtindex,
 					 Relation rel, List *targetAttrs, char *attname)
 {
+#if PG_VERSION_NUM >= 140000
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+#endif
 	AttrNumber	pindex;
 	bool		first;
 	ListCell   *lc;
@@ -1399,6 +1430,9 @@ mysql_deparse_update(StringInfo buf, PlannerInfo *root, Index rtindex,
 	foreach(lc, targetAttrs)
 	{
 		int			attnum = lfirst_int(lc);
+#if PG_VERSION_NUM >= 140000
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+#endif
 
 		if (attnum == 1)
 			continue;
@@ -1408,6 +1442,13 @@ mysql_deparse_update(StringInfo buf, PlannerInfo *root, Index rtindex,
 		first = false;
 
 		mysql_deparse_column_ref(buf, rtindex, attnum, planner_rt_fetch(rtindex, root), false);
+#if PG_VERSION_NUM >= 140000
+		if (attr->attgenerated)
+		{
+			appendStringInfoString(buf, " = DEFAULT");
+			continue;
+		}
+#endif
 		appendStringInfo(buf, " = ?");
 		pindex++;
 	}
@@ -1442,7 +1483,7 @@ mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
 	deparse_expr_cxt context;
 	int			nestlevel;
 	bool		first;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	ListCell   *lc,
 			   *lc2;
 #else
@@ -1487,7 +1528,7 @@ mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
 	nestlevel = mysql_set_transmission_modes();
 
 	first = true;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	forboth(lc, targetlist, lc2, targetAttrs)
 	{
 		TargetEntry *tle = lfirst_node(TargetEntry, lc);
@@ -2967,7 +3008,7 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 	HeapTuple	tuple;
 	Form_pg_operator form;
 	char		oprkind;
-#if (PG_VERSION_NUM < 140000)
+#if PG_VERSION_NUM < 140000
 	ListCell   *arg;
 #endif
 	bool		is_convert = false; /* Flag to determine that convert '/' to
@@ -2984,7 +3025,7 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 	oprkind = form->oprkind;
 
 	/* Sanity check. */
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	Assert((oprkind == 'l' && list_length(node->args) == 1) ||
 		   (oprkind == 'b' && list_length(node->args) == 2));
 #else
@@ -3009,7 +3050,7 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 		appendStringInfoChar(buf, '(');
 	}
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	/* Deparse left operand, if any. */
 	if (oprkind == 'b')
 	{
@@ -3037,7 +3078,7 @@ mysql_deparse_op_expr(OpExpr *node, deparse_expr_cxt *context)
 	else
 		mysql_deparse_operator_name(buf, form);
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	/* Deparse right operand. */
 	appendStringInfoChar(buf, ' ');
 	deparseExpr(llast(node->args), context);
@@ -3110,12 +3151,10 @@ mysql_deparse_distinct_expr(DistinctExpr *node, deparse_expr_cxt *context)
 	Assert(list_length(node->args) == 2);
 
 	/*
-	 * Check value of is_not_distinct_op
-	 * If is_not_distinct_op is true:
-	 * IS NOT DISTINCT operator is equivalents with "<=>" operator in MySQL.
-	 * If is_not_distinct_op is false:
-	 * IS DISTINCT operator is equivalents NOT logic operator on "<=>" operator
-	 * expression in MySQL.
+	 * Check value of is_not_distinct_op If is_not_distinct_op is true: IS NOT
+	 * DISTINCT operator is equivalents with "<=>" operator in MySQL. If
+	 * is_not_distinct_op is false: IS DISTINCT operator is equivalents NOT
+	 * logic operator on "<=>" operator expression in MySQL.
 	 */
 	if (!outer_is_not_distinct_op)
 	{
@@ -3891,7 +3930,7 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 				if (ar->refassgnexpr != NULL)
 					return false;
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 
 				/*
 				 * Recurse into the remaining subexpressions.  The container
@@ -3918,7 +3957,7 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 				if (ar->reflowerindexpr)
 					return false;
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 				inner_cxt.collation = InvalidOid;
 				inner_cxt.state = FDW_COLLATE_NONE;
 #endif
@@ -3926,7 +3965,7 @@ foreign_expr_walker(Node *node, foreign_glob_cxt *glob_cxt,
 				if (!foreign_expr_walker((Node *) ar->refexpr,
 										 glob_cxt, &inner_cxt))
 					return false;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 
 				/*
 				 * Container subscripting typically yields same collation as

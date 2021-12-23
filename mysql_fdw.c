@@ -40,6 +40,10 @@
 #include "mysql_query.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/nodes.h"
+#if PG_VERSION_NUM >= 140000
+#include "optimizer/appendinfo.h"
+#endif
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
 #include "optimizer/paths.h"
@@ -61,7 +65,7 @@
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 #include "utils/selfuncs.h"
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 #include "executor/execAsync.h"
 #include "optimizer/appendinfo.h"
 #include "optimizer/prep.h"
@@ -132,9 +136,9 @@ uint64_t	((mysql_stmt_affected_rows) (MYSQL_STMT * stmt));
 
 /*
  * In PG 9.5.1 the number will be 90501,
- * our version is 2.6.0 so number will be 20600
+ * our version is 2.6.1 so number will be 20601
  */
-#define CODE_VERSION   20601
+#define CODE_VERSION   20602
 
 /* Struct for extra information passed to estimate_path_cost_size() */
 typedef struct
@@ -302,7 +306,7 @@ static TupleTableSlot *mysqlExecForeignInsert(EState *estate,
 											  ResultRelInfo *resultRelInfo,
 											  TupleTableSlot *slot,
 											  TupleTableSlot *planSlot);
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 static TupleTableSlot **mysqlExecForeignBatchInsert(EState *estate,
 													ResultRelInfo *resultRelInfo,
 													TupleTableSlot **slots,
@@ -314,15 +318,16 @@ static void mysqlExecForeignTruncate(List *rels,
 									 bool restart_seqs);
 #endif
 
-static void mysqlAddForeignUpdateTargets(
-#if (PG_VERSION_NUM < 140000)
-										 Query *parsetree,
-#else
-										 PlannerInfo *root,
+#if PG_VERSION_NUM >= 140000
+static void mysqlAddForeignUpdateTargets(PlannerInfo *root,
 										 Index rtindex,
-#endif
 										 RangeTblEntry *target_rte,
 										 Relation target_relation);
+#else
+static void mysqlAddForeignUpdateTargets(Query *parsetree,
+										 RangeTblEntry *target_rte,
+										 Relation target_relation);
+#endif
 
 static TupleTableSlot *mysqlExecForeignUpdate(EState *estate,
 											  ResultRelInfo *resultRelInfo,
@@ -492,8 +497,9 @@ static void merge_fdw_options(MySQLFdwRelationInfo * fpinfo,
 static bool ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 									  EquivalenceClass *ec, EquivalenceMember *em,
 									  void *arg);
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 static int	get_batch_size_option(Relation rel);
+static char *mysql_remove_backtick_quotes(char *s1);
 #endif
 
 /*
@@ -683,7 +689,7 @@ mysql_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->PlanForeignModify = mysqlPlanForeignModify;
 	fdwroutine->BeginForeignModify = mysqlBeginForeignModify;
 	fdwroutine->ExecForeignInsert = mysqlExecForeignInsert;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	fdwroutine->ExecForeignBatchInsert = mysqlExecForeignBatchInsert;
 	fdwroutine->GetForeignModifyBatchSize = mysqlGetForeignModifyBatchSize;
 #endif
@@ -702,7 +708,7 @@ mysql_fdw_handler(PG_FUNCTION_ARGS)
 	fdwroutine->ExplainDirectModify = mysqlExplainDirectModify;
 	fdwroutine->ExplainForeignModify = mysqlExplainForeignModify;
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	/* Support function for TRUNCATE */
 	fdwroutine->ExecForeignTruncate = mysqlExecForeignTruncate;
 #endif
@@ -747,7 +753,6 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 	mysql_opt  *options;
 	ListCell   *lc;
 	int			atindex = 0;
-	unsigned long prefetch_rows = MYSQL_PREFETCH_ROWS;
 	unsigned long type = (unsigned long) CURSOR_TYPE_READ_ONLY;
 	Oid			userid;
 	ForeignServer *server;
@@ -876,7 +881,7 @@ mysqlBeginForeignScan(ForeignScanState *node, int eflags)
 
 	/* Set the pre-fetch rows */
 	mysql_stmt_attr_set(festate->stmt, STMT_ATTR_PREFETCH_ROWS,
-						(void *) &prefetch_rows);
+						(void *) &options->fetch_size);
 
 	festate->table = (mysql_table *) palloc0(sizeof(mysql_table));
 	festate->table->column = (mysql_column *) palloc0(sizeof(mysql_column) * tupleDescriptor->natts);
@@ -1286,7 +1291,7 @@ mysqlGetForeignRelSize(PlannerInfo *root, RelOptInfo *baserel,
 	}
 	else
 	{
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 		/*
 		 * If the foreign table has never been ANALYZEd, it will have
 		 * reltuples < 0, meaning "unknown".  We can't do much if we're not
@@ -2041,7 +2046,7 @@ mysqlPlanForeignModify(PlannerInfo *root,
 	ListCell   *lc;
 	int			key_column_idx = 1;
 	bool		doNothing = false;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	int			values_end_len = -1;
 #endif
 
@@ -2145,7 +2150,7 @@ mysqlPlanForeignModify(PlannerInfo *root,
 	switch (operation)
 	{
 		case CMD_INSERT:
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 			mysql_deparse_insert(&sql, rte, resultRelation, rel, targetAttrs, doNothing, &values_end_len);
 #else
 			mysql_deparse_insert(&sql, rte, resultRelation, rel, targetAttrs, doNothing);
@@ -2170,7 +2175,7 @@ mysqlPlanForeignModify(PlannerInfo *root,
 
 	table_close(rel, NoLock);
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	return list_make3(makeString(sql.data), targetAttrs, makeInteger(values_end_len));
 #else
 	return list_make2(makeString(sql.data), targetAttrs);
@@ -2201,7 +2206,7 @@ mysqlBeginForeignModify(ModifyTableState *mtstate,
 	ForeignServer *server;
 	UserMapping *user;
 	ForeignTable *table;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	int			values_end_len;
 #endif
 
@@ -2235,8 +2240,10 @@ mysqlBeginForeignModify(ModifyTableState *mtstate,
 
 	fmstate->retrieved_attrs = (List *) list_nth(fdw_private, FdwModifyPrivateTargetAttnums);
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	values_end_len = intVal(list_nth(fdw_private, FdwModifyPrivateValuesEndLen));
+	fmstate->target_attrs = (List *) list_nth(fdw_private,
+											  FdwModifyPrivateTargetAttnums);
 #endif
 
 	n_params = list_length(fmstate->retrieved_attrs);
@@ -2257,7 +2264,7 @@ mysqlBeginForeignModify(ModifyTableState *mtstate,
 	if (mtstate->operation == CMD_UPDATE)
 	{
 		Form_pg_attribute attr;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 		Plan	   *subplan = outerPlanState(mtstate)->plan;
 #else
 		Plan	   *subplan = mtstate->mt_plans[subplan_index]->plan;
@@ -2305,7 +2312,7 @@ mysqlBeginForeignModify(ModifyTableState *mtstate,
 	/* Initialize auxiliary state */
 	fmstate->aux_fmstate = NULL;
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	if (mtstate->operation == CMD_INSERT)
 	{
 		fmstate->query = pstrdup(fmstate->query);
@@ -2335,7 +2342,7 @@ mysql_execute_foreign_insert(EState *estate,
 	int			n_params;
 	MemoryContext oldcontext;
 	bool	   *isnull;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	StringInfoData sql;
 #endif
 	int			i;
@@ -2351,7 +2358,7 @@ mysql_execute_foreign_insert(EState *estate,
 
 	mysql_query(fmstate->conn, "SET sql_mode='ANSI_QUOTES'");
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	if (fmstate->num_slots != *numSlots)
 	{
 		/*
@@ -2364,8 +2371,10 @@ mysql_execute_foreign_insert(EState *estate,
 
 		/* Build INSERT string with numSlots records in its VALUES clause. */
 		initStringInfo(&sql);
-		mysql_rebuild_insert_sql(&sql, fmstate->orig_query, fmstate->values_end,
-								 fmstate->p_nums, *numSlots - 1);
+		mysql_rebuild_insert_sql(&sql, fmstate->rel,
+								 fmstate->orig_query, fmstate->target_attrs,
+								 fmstate->values_end, fmstate->p_nums,
+								 *numSlots - 1);
 		fmstate->query = sql.data;
 
 		/* Prepare mysql statment */
@@ -2400,7 +2409,7 @@ mysql_execute_foreign_insert(EState *estate,
 	if (mysql_stmt_execute(fmstate->stmt) != 0)
 		mysql_stmt_error_print(fmstate->conn, fmstate->stmt, "failed to execute the MySQL query");
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	fmstate->num_slots = *numSlots;
 #endif
 	MemoryContextSwitchTo(oldcontext);
@@ -2437,7 +2446,7 @@ mysqlExecForeignInsert(EState *estate,
 	return rslot ? *rslot : NULL;
 }
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 /*
  * mysqlExecForeignBatchInsert
  *		Insert multiple rows into a foreign table
@@ -2541,6 +2550,10 @@ mysqlExecForeignUpdate(EState *estate,
 	{
 		int			attnum = lfirst_int(lc);
 		Oid			type;
+#if PG_VERSION_NUM >= 140000
+		TupleDesc	tupdesc = RelationGetDescr(fmstate->rel);
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+#endif
 
 		/*
 		 * The first attribute cannot be in the target list attribute.  Set
@@ -2552,6 +2565,11 @@ mysqlExecForeignUpdate(EState *estate,
 			found_row_id_col = true;
 			continue;
 		}
+#if PG_VERSION_NUM >= 140000
+		/* Ignore generated columns; they are set to DEFAULT */
+		if (attr->attgenerated)
+			continue;
+#endif
 
 		type = TupleDescAttr(slot->tts_tupleDescriptor, attnum - 1)->atttypid;
 		value = slot_getattr(slot, attnum, (bool *) (&isnull[bindnum]));
@@ -2641,23 +2659,23 @@ mysqlExecForeignUpdate(EState *estate,
  * 		using first column as row identification column, so we are adding
  * 		that into target list.
  */
-
+#if PG_VERSION_NUM >= 140000
 static void
-mysqlAddForeignUpdateTargets(
-#if (PG_VERSION_NUM < 140000)
-							 Query *parsetree,
-#else
-							 PlannerInfo *root,
+mysqlAddForeignUpdateTargets(PlannerInfo *root,
 							 Index rtindex,
-#endif
 							 RangeTblEntry *target_rte,
 							 Relation target_relation)
+#else
+static void
+mysqlAddForeignUpdateTargets(Query *parsetree,
+							 RangeTblEntry *target_rte,
+							 Relation target_relation)
+#endif
 {
 	Var		   *var;
 	const char *attrname;
-#if (PG_VERSION_NUM < 140000)
+#if PG_VERSION_NUM < 140000
 	TargetEntry *tle;
-	Index		rtindex = parsetree->resultRelation;
 #endif
 
 	/*
@@ -2666,7 +2684,11 @@ mysqlAddForeignUpdateTargets(
 	Form_pg_attribute attr = TupleDescAttr(target_relation->rd_att, 0);
 
 	/* Make a Var representing the desired value */
+#if PG_VERSION_NUM >= 140000
 	var = makeVar(rtindex,
+#else
+	var = makeVar(parsetree->resultRelation,
+#endif
 				  attr->attnum,
 				  attr->atttypid,
 				  attr->atttypmod,
@@ -2675,16 +2697,18 @@ mysqlAddForeignUpdateTargets(
 
 	/* Get name of the row identifier column */
 	attrname = NameStr(attr->attname);
-#if (PG_VERSION_NUM < 140000)
+
+#if PG_VERSION_NUM >= 140000
+	/* Register it as a row-identity column needed by this target rel */
+	add_row_identity_var(root, var, rtindex, attrname);
+#else
+	/* Wrap it in a TLE with the right name ... */
 	tle = makeTargetEntry((Expr *) var,
 						  list_length(parsetree->targetList) + 1,
 						  pstrdup(attrname), true);
 
 	/* ... and add it to the query's targetlist */
 	parsetree->targetList = lappend(parsetree->targetList, tle);
-#else
-	/* Register it as a row-identity column needed by this target rel */
-	add_row_identity_var(root, var, rtindex, attrname);
 #endif
 }
 
@@ -2745,7 +2769,7 @@ mysqlEndForeignModify(EState *estate, ResultRelInfo *resultRelInfo)
 	}
 }
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 /*
  * find_modifytable_subplan
  *		Helper routine for mysqlPlanDirectModify to find the
@@ -2785,7 +2809,9 @@ find_modifytable_subplan(PlannerInfo *root,
 		if (subplan_index < list_length(appendplan->appendplans))
 			subplan = (Plan *) list_nth(appendplan->appendplans, subplan_index);
 	}
-	else if (IsA(subplan, Result) && IsA(outerPlan(subplan), Append))
+	else if (IsA(subplan, Result) &&
+			 outerPlan(subplan) != NULL &&
+			 IsA(outerPlan(subplan), Append))
 	{
 		Append	   *appendplan = (Append *) outerPlan(subplan);
 
@@ -2820,7 +2846,7 @@ mysqlPlanDirectModify(PlannerInfo *root,
 					  int subplan_index)
 {
 	CmdType		operation = plan->operation;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	List	   *processed_tlist = NIL;
 #else
 	Plan	   *subplan;
@@ -2847,7 +2873,7 @@ mysqlPlanDirectModify(PlannerInfo *root,
 	if (operation != CMD_UPDATE && operation != CMD_DELETE)
 		return false;
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 
 	/*
 	 * Try to locate the ForeignScan subplan that's scanning resultRelation.
@@ -2906,7 +2932,7 @@ mysqlPlanDirectModify(PlannerInfo *root,
 	 */
 	if (operation == CMD_UPDATE)
 	{
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 		ListCell   *lc,
 				   *lc2;
 
@@ -2998,7 +3024,7 @@ mysqlPlanDirectModify(PlannerInfo *root,
 		case CMD_UPDATE:
 			mysql_deparse_direct_update_sql(&sql, root, resultRelation, rel,
 											foreignrel,
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 											processed_tlist,
 #else
 											((Plan *) fscan)->targetlist,
@@ -3018,7 +3044,7 @@ mysqlPlanDirectModify(PlannerInfo *root,
 			break;
 	}
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 
 	/*
 	 * Update the operation and target relation info.
@@ -3096,7 +3122,7 @@ mysqlBeginDirectModify(ForeignScanState *node, int eflags)
 	 * Identify which user to do the remote access as.  This should match what
 	 * ExecCheckRTEPerms() does.
 	 */
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	rtindex = node->resultRelInfo->ri_RangeTableIndex;
 #else
 	rtindex = estate->es_result_relation_info->ri_RangeTableIndex;
@@ -3252,7 +3278,7 @@ mysqlExplainForeignModify(ModifyTableState *mtstate,
 
 		ExplainPropertyText("Remote query", sql, es);
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 
 		/*
 		 * For INSERT we should always have batch size >= 1, but UPDATE and
@@ -3288,7 +3314,7 @@ mysqlExplainDirectModify(ForeignScanState *node,
  * mysqlExecForeignTruncate
  *		Truncate one or more foreign tables
  */
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 static void
 mysqlExecForeignTruncate(List *rels,
 						 DropBehavior behavior,
@@ -3395,6 +3421,9 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 	List	   *commands = NIL;
 	bool		import_default = false;
 	bool		import_not_null = true;
+#if PG_VERSION_NUM >= 140000
+	bool		import_generated = true;
+#endif
 	ForeignServer *server;
 	UserMapping *user;
 	mysql_opt  *options;
@@ -3413,6 +3442,10 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 			import_default = defGetBoolean(def);
 		else if (strcmp(def->defname, "import_not_null") == 0)
 			import_not_null = defGetBoolean(def);
+#if PG_VERSION_NUM >= 140000
+		else if (strcmp(def->defname, "import_generated") == 0)
+			import_generated = defGetBoolean(def);
+#endif
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
@@ -3482,7 +3515,13 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 					 "  END,"
 					 "  c.COLUMN_TYPE,"
 					 "  IF(c.IS_NULLABLE = 'NO', 't', 'f'),"
+#if PG_VERSION_NUM >= 140000
+					 "  c.COLUMN_DEFAULT,"
+					 "  c.EXTRA,"
+					 "  c.GENERATION_EXPRESSION"
+#else
 					 "  c.COLUMN_DEFAULT"
+#endif
 					 " FROM"
 					 "  information_schema.TABLES AS t"
 					 " JOIN"
@@ -3545,6 +3584,9 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 			char	   *typedfn;
 			char	   *attnotnull;
 			char	   *attdefault;
+#if PG_VERSION_NUM >= 140000
+			char	   *attgenerated;
+#endif
 
 			/* If table has no columns, we'll see nulls here */
 			if (row[1] == NULL)
@@ -3559,6 +3601,9 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 			typedfn = row[3];
 			attnotnull = row[4];
 			attdefault = row[5] == NULL ? (char *) NULL : row[5];
+#if PG_VERSION_NUM >= 140000
+			attgenerated = row[6] == NULL ? (char *) NULL : row[6];
+#endif
 
 			if (strncmp(typedfn, "enum(", 5) == 0)
 				ereport(NOTICE,
@@ -3576,12 +3621,30 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 							 typename);
 
 			/* Add DEFAULT if needed */
+#if PG_VERSION_NUM >= 140000
+			if (import_default && attdefault != NULL &&
+				(!attgenerated || !attgenerated[0]))
+#else
 			if (import_default && attdefault != NULL)
+#endif
 				appendStringInfo(&buf, " DEFAULT %s", attdefault);
 
 			/* Add NOT NULL if needed */
 			if (import_not_null && attnotnull[0] == 't')
 				appendStringInfoString(&buf, " NOT NULL");
+
+#if PG_VERSION_NUM >= 140000
+			/* Add GENERATED if needed */
+			if (import_generated && attgenerated != NULL &&
+				attgenerated[0] == MYSQL_ATTRIBUTE_GENERATED_STORED)
+			{
+				attdefault = mysql_remove_backtick_quotes(row[7]);
+				Assert(attdefault != NULL);
+				appendStringInfo(&buf,
+								 " GENERATED ALWAYS AS %s STORED",
+								 attdefault);
+			}
+#endif
 		}
 		while ((row = mysql_fetch_row(res)) &&
 			   (strcmp(row[0], tablename) == 0));
@@ -3641,7 +3704,7 @@ mysqlBeginForeignInsert(ModifyTableState *mtstate,
 	UserMapping *user;
 	ForeignTable *table;
 	bool		doNothing = false;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	int			values_end_len;
 #endif
 
@@ -3655,7 +3718,7 @@ mysqlBeginForeignInsert(ModifyTableState *mtstate,
 	if (plan && plan->operation == CMD_UPDATE &&
 		(resultRelInfo->ri_usesFdwDirectModify ||
 		 resultRelInfo->ri_FdwState)
-#if (PG_VERSION_NUM < 140000)
+#if PG_VERSION_NUM < 140000
 		&& resultRelInfo > mtstate->resultRelInfo + mtstate->mt_whichplan
 #endif
 		)
@@ -3673,6 +3736,11 @@ mysqlBeginForeignInsert(ModifyTableState *mtstate,
 
 		if (!attr->attisdropped)
 			targetAttrs = lappend_int(targetAttrs, attnum);
+#if PG_VERSION_NUM >= 140000
+		/* Ignore generated columns; they are set to DEFAULT */
+		if (attr->attgenerated)
+			continue;
+#endif
 	}
 
 	/* Check if we add the ON CONFLICT clause to the remote query. */
@@ -3726,7 +3794,7 @@ mysqlBeginForeignInsert(ModifyTableState *mtstate,
 	}
 
 	/* Construct the SQL command string. */
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	mysql_deparse_insert(&sql, rte, resultRelation, rel, targetAttrs, doNothing, &values_end_len);
 #else
 	mysql_deparse_insert(&sql, rte, resultRelation, rel, targetAttrs, doNothing);
@@ -3784,7 +3852,7 @@ mysqlBeginForeignInsert(ModifyTableState *mtstate,
 						   strlen(fmstate->query)) != 0)
 		mysql_stmt_error_print(fmstate->conn, fmstate->stmt, "failed to prepare the MySQL query");
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	fmstate->query = pstrdup(fmstate->query);
 	fmstate->orig_query = pstrdup(fmstate->query);
 	/* Set batch_size from foreign server/table options. */
@@ -4776,7 +4844,7 @@ estimate_path_cost_size(PlannerInfo *root,
 		 */
 		if (fpinfo->rel_startup_cost >= 0 && fpinfo->rel_total_cost >= 0)
 		{
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 			Assert(fpinfo->retrieved_rows >= 0);
 #else
 			Assert(fpinfo->retrieved_rows >= 1);
@@ -4916,7 +4984,7 @@ estimate_path_cost_size(PlannerInfo *root,
 			MemSet(&aggcosts, 0, sizeof(AggClauseCosts));
 			if (root->parse->hasAggs)
 			{
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 				get_agg_clause_costs(root, AGGSPLIT_SIMPLE, &aggcosts);
 #else
 				get_agg_clause_costs(root, (Node *) fpinfo->grouped_tlist,
@@ -4934,7 +5002,7 @@ estimate_path_cost_size(PlannerInfo *root,
 
 			/* Get number of grouping columns and possible number of groups */
 			numGroupCols = list_length(root->parse->groupClause);
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 			numGroups = estimate_num_groups(root,
 											get_sortgrouplist_exprs(root->parse->groupClause,
 																	fpinfo->grouped_tlist),
@@ -5308,11 +5376,13 @@ apply_server_options(MySQLFdwRelationInfo * fpinfo)
 		if (strcmp(def->defname, "use_remote_estimate") == 0)
 			fpinfo->use_remote_estimate = defGetBoolean(def);
 		else if (strcmp(def->defname, "fdw_startup_cost") == 0)
-			fpinfo->fdw_startup_cost = strtod(defGetString(def), NULL);
+			(void) parse_real(defGetString(def), &fpinfo->fdw_startup_cost, 0,
+							  NULL);
 		else if (strcmp(def->defname, "fdw_tuple_cost") == 0)
-			fpinfo->fdw_tuple_cost = strtod(defGetString(def), NULL);
+			(void) parse_real(defGetString(def), &fpinfo->fdw_tuple_cost, 0,
+							  NULL);
 		else if (strcmp(def->defname, "fetch_size") == 0)
-			fpinfo->fetch_size = strtol(defGetString(def), NULL, 10);
+			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 	}
 }
 
@@ -5333,7 +5403,7 @@ apply_table_options(MySQLFdwRelationInfo * fpinfo)
 		if (strcmp(def->defname, "use_remote_estimate") == 0)
 			fpinfo->use_remote_estimate = defGetBoolean(def);
 		else if (strcmp(def->defname, "fetch_size") == 0)
-			fpinfo->fetch_size = strtol(defGetString(def), NULL, 10);
+			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 	}
 }
 
@@ -5891,7 +5961,7 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 			 * RestrictInfos, so we must make our own.
 			 */
 			Assert(!IsA(expr, RestrictInfo));
-#if (PG_VERSION_NUM >= 133000)
+#if PG_VERSION_NUM >= 133000
 			rinfo = make_restrictinfo(root,
 									  expr,
 									  true,
@@ -6902,10 +6972,10 @@ mysql_build_whole_row_constr_info(MySQLFdwExecState * festate,
 
 	/*
 	 * Construct the array mapping columns in the ForeignScan node output to
-	 * their positions in the result fetched from the foreign server.
-	 * Positive values indicate the locations in the result and negative
-	 * values indicate the range table indexes of the base table whose
-	 * whole-row reference values are requested in that place.
+	 * their positions in the result fetched from the foreign server. Positive
+	 * values indicate the locations in the result and negative values
+	 * indicate the range table indexes of the base table whose whole-row
+	 * reference values are requested in that place.
 	 */
 	fs_num_atts = list_length(fdw_scan_tlist);
 	fs_attr_pos = (int *) palloc(sizeof(int) * fs_num_atts);
@@ -7020,7 +7090,7 @@ mysql_form_whole_row(MySQLWRState * wr_state, Datum *values, bool *nulls)
 }
 
 
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 /*
  * Determine batch size for a given foreign table. The option specified for
  * a table has precedence.
@@ -7055,9 +7125,46 @@ get_batch_size_option(Relation rel)
 
 		if (strcmp(def->defname, "batch_size") == 0)
 		{
-			batch_size = strtol(defGetString(def), NULL, 10);
+			(void) parse_int(defGetString(def), &batch_size, 0, NULL);
 		}
 	}
 	return batch_size;
 }
+
+/*
+ * Find and remove backtick (grave accent) characters ( ` ) from MySQL returned string
+ * MySQL uses backticks to signify the column and table names
+ * It is equivalent with double quotation character but cannot be used in PostgreSQL
+ * If there are two consecutive backticks, the first is the escape character and is removed.
+ */
+static char *
+mysql_remove_backtick_quotes(char *s1)
+{
+	int			i,
+				j;
+	bool		skip = false;
+	char	   *s2;
+
+	Assert(s1 != NULL && strlen(s1) > 0);
+	s2 = palloc0(strlen(s1));
+
+	for (i = 0, j = 0; s1[i] != '\0'; i++)
+	{
+		if (s1[i] == '`' && skip == false)
+		{
+			skip = true;
+			continue;
+		}
+		else
+		{
+			s2[j] = s1[i];
+			j++;
+			skip = false;
+		}
+
+	}
+	s2[j] = '\0';
+	return s2;
+}
+
 #endif

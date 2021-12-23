@@ -201,6 +201,7 @@ SEMI, and ANTI join. This is a performance feature.
 - Support discard cached connections to remote servers by using function mysql_fdw_disconnect(), mysql_fdw_disconnect_all().
 - Support bulk insert by using batch_size option.
 - Whole row reference is implemented by modifying the target list to select all whole row reference members and form new row for the whole row in FDW when interate foreign scan.
+- Support returning system attribute (`ctid`, `tableiod`)
 
 ### Prepared Statement
 (Refactoring for `select` queries to use prepared statement)
@@ -223,6 +224,9 @@ The following parameters can be set on a MySQL foreign server object:
     MySQL server.
   * `use_remote_estimate`: Controls whether mysql_fdw issues remote
     EXPLAIN commands to obtain cost estimates. Default is `false`
+  * `reconnect`: Enable or disable automatic reconnection to the
+    MySQL server if the existing connection is found to have been lost.
+    Default is `false`.
   * `ssl_key`: The path name of the client private key file.
   * `ssl_cert`: The path name of the client public key certificate file.
   * `ssl_ca`: The path name of the Certificate Authority (CA) certificate
@@ -231,6 +235,10 @@ The following parameters can be set on a MySQL foreign server object:
   * `ssl_capath`: The path name of the directory that contains trusted
     SSL CA certificate files.
   * `ssl_cipher`: The list of permissible ciphers for SSL encryption.
+  * `fetch_size`: This option specifies the number of rows mysql_fdw should
+    get in each fetch operation. It can be specified for a foreign table or
+    a foreign server. The option specified on a table overrides an option
+    specified for the server. The default is `100`.
 
 The following parameters can be set on a MySQL foreign table object:
 
@@ -239,6 +247,7 @@ The following parameters can be set on a MySQL foreign table object:
   * `table_name`: Name of the MySQL table, default is the same as
     foreign table.
   * `max_blob_size`: Max blob size to read without truncation.
+  * `fetch_size`: Same as `fetch_size` parameter for foreign server.
 
 The following parameters need to supplied while creating user mapping.
 
