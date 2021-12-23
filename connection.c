@@ -87,7 +87,7 @@ PG_FUNCTION_INFO_V1(mysql_fdw_disconnect_all);
 
 /* prototypes of private functions */
 static void mysql_make_new_connection(ConnCacheEntry *entry, UserMapping *user, mysql_opt * opt);
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 static bool disconnect_cached_connections(Oid serverid);
 #endif
 static void disconnect_mysql_server(ConnCacheEntry *entry);
@@ -121,7 +121,7 @@ mysql_get_connection(ForeignServer *server, UserMapping *user, mysql_opt * opt)
 		ctl.hcxt = CacheMemoryContext;
 		ConnectionHash = hash_create("mysql_fdw connections", 8,
 									 &ctl,
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 									 HASH_ELEM | HASH_BLOBS);
 #else
 									 HASH_ELEM | HASH_FUNCTION | HASH_CONTEXT);
@@ -376,6 +376,12 @@ mysql_connect(mysql_opt * opt)
 
 	if (svr_init_command != NULL)
 		mysql_options(conn, MYSQL_INIT_COMMAND, svr_init_command);
+
+	/*
+	 * Enable or disable automatic reconnection to the MySQL server if the
+	 * existing connection is found to have been lost.
+	 */
+	mysql_options(conn, MYSQL_OPT_RECONNECT, &opt->reconnect);
 
 	mysql_ssl_set(conn, opt->ssl_key, opt->ssl_cert, opt->ssl_ca,
 				  opt->ssl_capath, ssl_cipher);

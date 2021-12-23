@@ -22,6 +22,7 @@
 #include "miscadmin.h"
 #include "mysql_fdw.h"
 #include "utils/lsyscache.h"
+#include "utils/guc.h"
 
 /*
  * Describes the valid options for objects that use this wrapper.
@@ -50,6 +51,10 @@ static struct MySQLFdwOption valid_options[] =
 	{"secure_auth", ForeignServerRelationId},
 	{"max_blob_size", ForeignTableRelationId},
 	{"use_remote_estimate", ForeignServerRelationId},
+	/* fetch_size is available on both server and table */
+	{"fetch_size", ForeignServerRelationId},
+	{"fetch_size", ForeignTableRelationId},
+	{"reconnect", ForeignServerRelationId},
 	{"use_remote_estimate", ForeignTableRelationId},
 	{"extensions", ForeignServerRelationId},
 	{"ssl_key", ForeignServerRelationId},
@@ -57,7 +62,7 @@ static struct MySQLFdwOption valid_options[] =
 	{"ssl_ca", ForeignServerRelationId},
 	{"ssl_capath", ForeignServerRelationId},
 	{"ssl_cipher", ForeignServerRelationId},
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	/* truncatable is available on both server and table */
 	{"truncatable", ForeignServerRelationId},
 	{"truncatable", ForeignTableRelationId},
@@ -120,7 +125,39 @@ mysql_fdw_validator(PG_FUNCTION_ARGS)
 							 buf.len ? buf.data : "<none>")));
 		}
 
-#if (PG_VERSION_NUM >= 140000)
+		/* Validate fetch_size option value */
+		if (strcmp(def->defname, "fetch_size") == 0)
+		{
+			unsigned long fetch_size;
+			char	   *endptr;
+			char	   *inputVal = defGetString(def);
+
+			while (inputVal && isspace((unsigned char) *inputVal))
+				inputVal++;
+
+			if (inputVal && *inputVal == '-')
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("\"%s\" requires an integer value between 1 to %lu",
+								def->defname, ULONG_MAX)));
+
+			errno = 0;
+			fetch_size = strtoul(inputVal, &endptr, 10);
+
+			if (*endptr != '\0' ||
+				(errno == ERANGE && fetch_size == ULONG_MAX) ||
+				fetch_size == 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("\"%s\" requires an integer value between 1 to %lu",
+								def->defname, ULONG_MAX)));
+		}
+		else if (strcmp(def->defname, "reconnect") == 0)
+		{
+			/* accept only boolean values */
+			(void) defGetBoolean(def);
+		}
+#if PG_VERSION_NUM >= 140000
 		if (strcmp(def->defname, "use_remote_estimate") == 0 ||
 			strcmp(def->defname, "truncatable") == 0 ||
 			strcmp(def->defname, "async_capable") == 0 ||
@@ -131,13 +168,23 @@ mysql_fdw_validator(PG_FUNCTION_ARGS)
 		}
 		else if (strcmp(def->defname, "batch_size") == 0)
 		{
-			int			batch_size;
+			char	   *value;
+			int			int_val;
+			bool		is_parsed;
 
-			batch_size = strtol(defGetString(def), NULL, 10);
-			if (batch_size <= 0)
+			value = defGetString(def);
+			is_parsed = parse_int(value, &int_val, 0, NULL);
+
+			if (!is_parsed)
 				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("%s requires a positive integer value",
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid value for integer option \"%s\": %s",
+								def->defname, value)));
+
+			if (int_val <= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("\"%s\" must be an integer value greater than zero",
 								def->defname)));
 		}
 #endif
@@ -196,16 +243,18 @@ mysql_get_options(Oid foreignoid, bool is_foreigntable)
 	f_mapping = GetUserMapping(GetUserId(), f_server->serverid);
 
 	options = NIL;
-	if (f_table)
-		options = list_concat(options, f_table->options);
 
-	options = list_concat(options, f_server->options);
-	options = list_concat(options, f_mapping->options);
+	options = mysql_list_concat(options, f_server->options);
+	options = mysql_list_concat(options, f_mapping->options);
+
+	if (f_table)
+		options = mysql_list_concat(options, f_table->options);
 
 	/* Default secure authentication is true */
 	opt->svr_sa = true;
 
 	opt->use_remote_estimate = false;
+	opt->reconnect = false;
 
 	/* Loop through the options */
 	foreach(lc, options)
@@ -241,6 +290,12 @@ mysql_get_options(Oid foreignoid, bool is_foreigntable)
 
 		if (strcmp(def->defname, "use_remote_estimate") == 0)
 			opt->use_remote_estimate = defGetBoolean(def);
+
+		if (strcmp(def->defname, "fetch_size") == 0)
+			opt->fetch_size = strtoul(defGetString(def), NULL, 10);
+
+		if (strcmp(def->defname, "reconnect") == 0)
+			opt->reconnect = defGetBoolean(def);
 
 		if (strcmp(def->defname, "column_name") == 0)
 			opt->column_name = defGetString(def);
@@ -281,6 +336,10 @@ mysql_get_options(Oid foreignoid, bool is_foreigntable)
 		if (!opt->svr_database)
 			opt->svr_database = get_namespace_name(get_rel_namespace(foreignoid));
 	}
+
+	/* Default value for fetch_size */
+	if (!opt->fetch_size)
+		opt->fetch_size = MYSQL_PREFETCH_ROWS;
 
 	return opt;
 }

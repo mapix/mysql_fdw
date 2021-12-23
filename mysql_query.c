@@ -65,6 +65,7 @@ mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column * column, MYSQL_FIELD 
 	HeapTuple	tuple;
 	int			typemod;
 	char	   *str = palloc0(MAXDATELEN);
+	bytea	   *result;
 
 	/* get the type's output function */
 	tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(pgtyp));
@@ -77,30 +78,28 @@ mysql_convert_to_pg(Oid pgtyp, int pgtypmod, mysql_column * column, MYSQL_FIELD 
 
 	switch (pgtyp)
 	{
-			/*
+			/* -----
 			 * MySQL gives BIT / BIT(n) data type as decimal value.  The only
 			 * way to retrieve this value is to use BIN, OCT or HEX function
 			 * in MySQL, otherwise mysql client shows the actual decimal
 			 * value, which could be a non - printable character.  For exmple
 			 * in MySQL
 			 *
-			 * CREATE TABLE t (b BIT(8));
-			 * INSERT INTO t SET b = b'1001';
-			 * SELECT BIN(b) FROM t;
-			 * +--------+
-			 * | BIN(b) |
-			 * +--------+
-			 * | 1001   |
+			 * CREATE TABLE t (b BIT(8)); INSERT INTO t SET b = b'1001';
+			 * SELECT BIN(b) FROM t; +--------+ | BIN(b) | +--------+ | 1001 |
 			 * +--------+
 			 *
 			 * PostgreSQL expacts all binary data to be composed of either '0'
-			 * or '1'. MySQL gives value 9 hence PostgreSQL reports error.
-			 * The solution is to convert the decimal number into equivalent
+			 * or '1'. MySQL gives value 9 hence PostgreSQL reports error. The
+			 * solution is to convert the decimal number into equivalent
 			 * binary string.
+			 * -----
 			 */
 		case BYTEAOID:
-			SET_VARSIZE(column->value, column->length + VARHDRSZ);
-			return PointerGetDatum(column->value);
+			result = (bytea *) palloc(column->length + VARHDRSZ);
+			memcpy(VARDATA(result), VARDATA(column->value), column->length);
+			SET_VARSIZE(result, column->length + VARHDRSZ);
+			return PointerGetDatum(result);
 
 		case BITOID:
 			{

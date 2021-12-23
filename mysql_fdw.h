@@ -49,6 +49,10 @@
 
 #define CR_NO_ERROR 0
 
+#if PG_VERSION_NUM >= 140000
+#define MYSQL_ATTRIBUTE_GENERATED_STORED 'S'
+#endif
+
 #define mysql_options (*_mysql_options)
 #define mysql_stmt_prepare (*_mysql_stmt_prepare)
 #define mysql_stmt_execute (*_mysql_stmt_execute)
@@ -190,6 +194,13 @@ typedef struct MySQLFdwRelationInfo
 	bool		is_tlist_func_pushdown;
 }			MySQLFdwRelationInfo;
 
+/* Macro for list API backporting. */
+#if PG_VERSION_NUM < 130000
+#define mysql_list_concat(l1, l2) list_concat(l1, list_copy(l2))
+#else
+#define mysql_list_concat(l1, l2) list_concat((l1), (l2))
+#endif
+
 /*
  * Options structure to store the MySQL
  * server information
@@ -208,6 +219,8 @@ typedef struct mysql_opt
 	unsigned long max_blob_size;	/* Max blob size to read without
 									 * truncation */
 	bool		use_remote_estimate;	/* use remote estimate for rows */
+	unsigned long fetch_size;	/* Number of rows to fetch from remote server */
+	bool		reconnect;		/* set to true for automatic reconnection */
 
 	char	   *column_name;	/* use column name option */
 
@@ -283,13 +296,11 @@ typedef struct MySQLFdwExecState
 	Oid		   *param_types;	/* type of query parameters */
 	int			p_nums;			/* number of parameters to transmit */
 	FmgrInfo   *p_flinfo;		/* output conversion functions for them */
-
 	mysql_opt  *mysqlFdwOptions;	/* MySQL FDW options */
 
 	bool		is_tlist_pushdown;	/* pushdown target list or not */
 	/* working memory context */
 	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
-
 	AttInMetadata *attinmeta;
 	AttrNumber	rowidAttno;		/* attnum of resjunk rowid column */
 	MYSQL_RES  *metadata;
@@ -316,8 +327,9 @@ typedef struct MySQLFdwExecState
 	/* Array for holding column values. */
 	Datum	   *wr_values;
 	bool	   *wr_nulls;
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	char	   *orig_query;		/* original text of INSERT command */
+	List	   *target_attrs;	/* list of target attribute numbers */
 	int			values_end;		/* length up to the end of VALUES */
 	int			batch_size;		/* value of FDW option "batch_size" */
 	/* batch operation stuff */
@@ -356,7 +368,7 @@ typedef struct MySQLFdwDirectModifyState
 
 	/* working memory context */
 	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 	char	   *orig_query;		/* original text of INSERT command */
 	int			values_end;		/* length up to the end of VALUES */
 	int			batch_size;		/* value of FDW option "batch_size" */
@@ -435,7 +447,7 @@ extern mysql_opt * mysql_get_options(Oid foreigntableid, bool is_foreigntable);
 extern void mysql_deparse_select(StringInfo buf, PlannerInfo *root,
 								 RelOptInfo *baserel, Bitmapset *attrs_used,
 								 char *svr_table, List **retrieved_attrs, List *tlist);
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 extern void mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte,
 								 Index rtindex, Relation rel,
 								 List *targetAttrs, bool doNothing,
@@ -448,8 +460,9 @@ extern void mysql_deparse_insert(StringInfo buf, RangeTblEntry *rte,
 extern void mysql_deparse_update(StringInfo buf, PlannerInfo *root,
 								 Index rtindex, Relation rel,
 								 List *targetAttrs, char *attname);
-extern void mysql_rebuild_insert_sql(StringInfo buf, char *orig_query,
-									 int values_end_len, int num_cols,
+extern void mysql_rebuild_insert_sql(StringInfo buf, Relation rel,
+									 char *orig_query, List *target_attrs,
+									 int values_end_len, int num_params,
 									 int num_rows);
 extern void mysql_deparse_direct_update_sql(StringInfo buf, PlannerInfo *root,
 											Index rtindex, Relation rel,
@@ -472,7 +485,7 @@ extern void mysql_append_where_clause(StringInfo buf, PlannerInfo *root,
 									  RelOptInfo *baserel, List *exprs,
 									  bool is_first, List **params);
 extern void mysql_deparse_analyze(StringInfo buf, char *dbname, char *relname);
-#if (PG_VERSION_NUM >= 140000)
+#if PG_VERSION_NUM >= 140000
 extern void mysql_deparse_truncate_sql(StringInfo buf,
 									   List *rels);
 #endif
@@ -514,7 +527,7 @@ extern char *mysql_quote_identifier(const char *str, char quotechar);
 #define TupleDescAttr(tupdesc, i) ((tupdesc)->attrs[(i)])
 #endif
 
-#if (PG_VERSION_NUM < 120000)
+#if PG_VERSION_NUM < 120000
 #define table_close(rel, lock)	heap_close(rel, lock)
 #define table_open(rel, lock)	heap_open(rel, lock)
 #define exec_rt_fetch(rtindex, estate)	rt_fetch(rtindex, estate->es_range_table)

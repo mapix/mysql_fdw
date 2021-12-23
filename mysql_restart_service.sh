@@ -9,9 +9,17 @@ mysql_ready() {
     mysqladmin ping > /dev/null 2>&1
 }
 
+counter=0;
+maxwait=60
 while !(mysql_ready)
 do
+    let "counter++"
     sleep 1
+    if [[ $counter -ge $maxwait ]]
+    then
+        echo "Fail to wait for mysql server to restart"
+        break
+    fi
 done
 
 mysql -u root -p$MYSQL_ROOT_PASS -e "SET GLOBAL time_zone = '-8:00';"
