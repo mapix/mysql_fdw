@@ -19,6 +19,7 @@
 #endif
 #include "mb/pg_wchar.h"
 #include "mysql_fdw.h"
+#include "mysql/errmsg.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
